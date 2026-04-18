@@ -64,6 +64,7 @@ class BatchTranslationSignals(QObject):
     error = pyqtSignal(str)
     finished = pyqtSignal(int, int)  # success_count, failure_count
     key_rotated = pyqtSignal(str, str)  # old_key_id, new_key_id
+    batch_results = pyqtSignal(list)  # list of per-item translation results
 
 
 class BatchTranslator(QRunnable):
@@ -162,9 +163,10 @@ class BatchTranslator(QRunnable):
                     translations = self._translate_batch(batch)
                     
                     # Apply translations to notes
-                    success, failed = self._apply_translations(batch, translations)
+                    success, failed, batch_results = self._apply_translations(batch, translations)
                     success_count += success
                     failure_count += failed
+                    self.signals.batch_results.emit(batch_results)
                     
                     # Record success
                     if success > 0:
@@ -261,13 +263,14 @@ class BatchTranslator(QRunnable):
                             "items": {
                                 "type": "object",
                                 "properties": {
+                                    "note_id": {"type": "integer"},
                                     "word": {"type": "string"},
                                     "translation": {
                                         "type": "string",
                                         "description": "Numbered list of meanings, e.g., '1. 가르치다, 교육하다\n2. 지시하다, 명령하다\n3. 알리다, 전하다'"
                                     },
                                 },
-                                "required": ["word", "translation"],
+                                "required": ["note_id", "word", "translation"],
                             },
                         },
                     },
@@ -283,7 +286,7 @@ class BatchTranslator(QRunnable):
         for i in range(0, len(self.notes_data), self.batch_size):
             yield self.notes_data[i:i + self.batch_size]
     
-    def _translate_batch(self, batch: List[Dict[str, Any]]) -> Dict[str, str]:
+    def _translate_batch(self, batch: List[Dict[str, Any]]) -> Dict[str, Dict[Any, str]]:
         """
         Translate a batch of words.
         
@@ -291,17 +294,18 @@ class BatchTranslator(QRunnable):
             batch: List of note data dicts
             
         Returns:
-            Dictionary mapping words to translations
+            Dictionary with both note_id and word based mappings
         """
         # Build batch prompt
         words_info = []
         for item in batch:
+            note_id = item.get("note_id", 0)
             word = item.get("word", "")
             context = item.get("context", "")
             if context:
-                words_info.append(f'- "{word}" (context: {context})')
+                words_info.append(f'- note_id: {note_id}, word: "{word}" (context: {context})')
             else:
-                words_info.append(f'- "{word}"')
+                words_info.append(f'- note_id: {note_id}, word: "{word}"')
         
         words_list = "\n".join(words_info)
         
@@ -323,6 +327,7 @@ Return a JSON object with this exact structure:
 {{
     "translations": [
         {{
+            "note_id": 12345,
             "word": "original_word",
             "translation": "1. [first meaning]\n2. [second meaning]\n3. [third meaning]"
         }},
@@ -334,6 +339,7 @@ Example for "instruct" with context "The teacher instructs the students":
 {{
     "translations": [
         {{
+            "note_id": 12345,
             "word": "instruct",
             "translation": "1. 가르치다, 교육하다\n2. 지시하다, 명령하다\n3. 알리다, 전하다\n4. 설명하다"
         }}
@@ -380,7 +386,7 @@ Example for "instruct" with context "The teacher instructs the students":
         self, 
         response: str, 
         batch: List[Dict[str, Any]]
-    ) -> Dict[str, str]:
+    ) -> Dict[str, Dict[Any, str]]:
         """Parse batch translation response."""
         cleaned = response.strip()
         
@@ -399,56 +405,150 @@ Example for "instruct" with context "The teacher instructs the students":
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON: {e}")
         
-        # Build result dictionary
-        result = {}
+        # Build result dictionaries for robust matching
+        by_note_id: Dict[int, str] = {}
+        by_word: Dict[str, str] = {}
         translations = data.get("translations", [])
         
         for item in translations:
+            note_id = item.get("note_id")
             word = item.get("word", "").strip()
             translation = item.get("translation", "").strip()
-            if word and translation:
-                result[word.lower()] = translation
+            if not translation:
+                continue
+
+            if note_id is not None:
+                try:
+                    by_note_id[int(note_id)] = translation
+                except Exception:
+                    pass
+
+            if word:
+                by_word[word.lower()] = translation
         
-        return result
+        # Fallback mapping by source words to avoid total failure
+        if not by_word and by_note_id:
+            for item in batch:
+                try:
+                    note_id = int(item.get("note_id"))
+                except Exception:
+                    note_id = 0
+                word = str(item.get("word", "")).strip().lower()
+                if not word:
+                    continue
+                if note_id in by_note_id:
+                    by_word[word] = by_note_id[note_id]
+
+        return {
+            "by_note_id": by_note_id,
+            "by_word": by_word,
+        }
     
     def _apply_translations(
         self, 
         batch: List[Dict[str, Any]], 
-        translations: Dict[str, str]
-    ) -> Tuple[int, int]:
+        translations: Dict[str, Dict[Any, str]]
+    ) -> Tuple[int, int, List[Dict[str, Any]]]:
         """
         Apply translations to notes.
         
         Returns:
-            Tuple of (success_count, failure_count)
+            Tuple of (success_count, failure_count, per_item_results)
         """
         success = 0
         failed = 0
+        item_results: List[Dict[str, Any]] = []
+
+        by_note_id = translations.get("by_note_id", {})
+        by_word = translations.get("by_word", {})
         
         for item in batch:
-            note_id = item.get("note_id")
-            word = item.get("word", "").lower()
+            raw_note_id = item.get("note_id")
+            try:
+                note_id = int(raw_note_id)
+            except Exception:
+                note_id = 0
+            word = str(item.get("word", "")).strip()
+            word_key = word.lower()
             
-            translation = translations.get(word, "")
+            translation = ""
+            if note_id in by_note_id:
+                translation = by_note_id.get(note_id, "")
+            elif word_key:
+                translation = by_word.get(word_key, "")
+
+            result_item: Dict[str, Any] = {
+                "note_id": note_id,
+                "word": word,
+                "target_field": self.destination_field,
+                "translation": translation,
+                "insert_status": "failed",
+                "insert_error": "",
+            }
             
             if not translation:
                 failed += 1
+                result_item["insert_error"] = "missing_translation"
+                item_results.append(result_item)
                 continue
             
             try:
-                # Update note
-                note = mw.col.get_note(note_id)
-                if note and self.destination_field in note:
-                    note[self.destination_field] = translation
-                    mw.col.update_note(note)
+                if note_id <= 0:
+                    raise ValueError("invalid_note_id")
+                ok, error = self._update_note_on_main_thread(note_id, translation)
+                if ok:
+                    result_item["insert_status"] = "success"
                     success += 1
                 else:
+                    result_item["insert_error"] = error or "note_update_failed"
                     failed += 1
             except Exception as e:
                 self._logger.error(f"Failed to update note {note_id}: {e}")
+                result_item["insert_error"] = str(e)
                 failed += 1
+            finally:
+                item_results.append(result_item)
         
-        return success, failed
+        return success, failed, item_results
+
+    def _run_on_main_thread(self, callback, timeout_seconds: float = 15.0):
+        """Run callback on main thread and return its result."""
+        if threading.current_thread() is threading.main_thread() or not hasattr(mw, "taskman"):
+            return callback()
+
+        done = threading.Event()
+        state: Dict[str, Any] = {"result": None, "error": None}
+
+        def wrapped() -> None:
+            try:
+                state["result"] = callback()
+            except Exception as exc:
+                state["error"] = exc
+            finally:
+                done.set()
+
+        mw.taskman.run_on_main(wrapped)
+        if not done.wait(timeout_seconds):
+            raise TimeoutError("Timed out waiting for main-thread note update")
+        if state["error"] is not None:
+            raise state["error"]
+        return state["result"]
+
+    def _update_note_on_main_thread(self, note_id: int, translation: str) -> Tuple[bool, str]:
+        """Safely update a note from worker thread."""
+        def _update() -> Tuple[bool, str]:
+            note = mw.col.get_note(note_id)
+            if not note:
+                return False, "note_not_found"
+            if self.destination_field not in note:
+                return False, "field_not_found"
+
+            note[self.destination_field] = translation
+            mw.col.update_note(note)
+            return True, ""
+
+        result = self._run_on_main_thread(_update)
+        return bool(result[0]), str(result[1])
     
     def _classify_error(self, error: Exception) -> str:
         """Classify error type."""

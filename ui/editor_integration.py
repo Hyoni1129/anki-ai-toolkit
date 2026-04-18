@@ -268,29 +268,28 @@ class EditorIntegration:
                 return
             
             from ..translation.translator import Translator
-            from aqt.operations import QueryOp
             from aqt import mw
             
             translator = Translator()
-            
-            def do_translate() -> dict:
-                return translator.translate_note_sync(editor.note)
-            
-            def on_success(result: dict) -> None:
-                if result.get("success"):
-                    # Reload note in editor
-                    editor.loadNote()
-                    logger.info(f"Note translated: {result.get('changes', 0)} fields")
-                else:
-                    from aqt.utils import showWarning
-                    showWarning(f"Translation failed: {result.get('error', 'Unknown error')}")
-            
-            op = QueryOp(
-                parent=mw,
-                op=lambda col: do_translate(),
-                success=on_success
+
+            config = self._config_manager.config.translation
+
+            def on_error(err: str) -> None:
+                logger.error(f"Translation failed: {err}")
+                from aqt.utils import showWarning
+                showWarning(f"Translation failed: {err}")
+
+            translator.translate_note_async(
+                parent_widget=mw,
+                note=editor.note,
+                source_field=config.source_field,
+                context_field=config.context_field,
+                destination_field=config.destination_field,
+                target_language=config.language,
+                model_name=config.model_name,
+                success_callback=lambda: editor.loadNote(),
+                error_callback=on_error,
             )
-            op.with_progress("Translating...").run_in_background()
             
         except Exception as e:
             logger.error(f"Translation error: {e}")
@@ -304,28 +303,30 @@ class EditorIntegration:
                 return
             
             from ..sentence.sentence_generator import SentenceGenerator
-            from aqt.operations import QueryOp
             from aqt import mw
             
             generator = SentenceGenerator()
-            
-            def do_generate() -> dict:
-                return generator.generate_sentence_sync(editor.note)
-            
-            def on_success(result: dict) -> None:
-                if result.get("success"):
-                    editor.loadNote()
-                    logger.info("Sentence generated")
-                else:
-                    from aqt.utils import showWarning
-                    showWarning(f"Sentence generation failed: {result.get('error')}")
-            
-            op = QueryOp(
-                parent=mw,
-                op=lambda col: do_generate(),
-                success=on_success
+
+            config = self._config_manager.config.sentence
+
+            def on_error(err: str) -> None:
+                logger.error(f"Sentence generation failed: {err}")
+                from aqt.utils import showWarning
+                showWarning(f"Sentence generation failed: {err}")
+
+            generator.generate_sentence_async(
+                parent_widget=mw,
+                note=editor.note,
+                expression_field=config.expression_field,
+                sentence_field=config.sentence_field,
+                translation_field=config.translation_field,
+                target_language=config.target_language,
+                difficulty=config.difficulty,
+                highlight=config.highlight_word,
+                model_name=getattr(config, "model_name", "gemini-2.5-flash"),
+                success_callback=lambda: editor.loadNote(),
+                error_callback=on_error,
             )
-            op.with_progress("Generating sentence...").run_in_background()
             
         except Exception as e:
             logger.error(f"Sentence generation error: {e}")

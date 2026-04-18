@@ -148,6 +148,9 @@ class SentenceConfig:
 class EditorConfig:
     """Editor integration configuration."""
     buttons_enabled: bool = True
+    auto_generate: bool = False
+    auto_generate_field: str = ""
+    auto_generate_feature: str = "translate"
     shortcuts: Dict[str, str] = field(default_factory=lambda: {
         "translate": "Ctrl+Shift+T",
         "sentence": "Ctrl+Shift+S",
@@ -165,6 +168,9 @@ class EditorConfig:
         }
         return cls(
             buttons_enabled=data.get("buttons_enabled", True),
+            auto_generate=data.get("auto_generate", False),
+            auto_generate_field=data.get("auto_generate_field", ""),
+            auto_generate_feature=data.get("auto_generate_feature", "translate"),
             shortcuts=data.get("shortcuts", default_shortcuts),
         )
 
