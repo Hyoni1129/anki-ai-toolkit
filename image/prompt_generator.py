@@ -295,7 +295,7 @@ class ImagePromptGenerator:
                         prompt=self._generate_fallback_prompt(word, style_config),
                         style=style_config.get("name", "default"),
                         success=True,
-                            error="Missing prompt for word",
+                        error="Missing prompt for word",
                         metadata={"fallback": True}
                     )
                     

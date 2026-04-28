@@ -1,0 +1,48 @@
+name: Lint & Validate
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint:
+    name: Python Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install linting tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8 pyflakes
+
+      - name: Run flake8
+        run: |
+          # E501: line too long (relaxed for Anki add-on patterns)
+          # W503: line break before binary operator (PEP 8 changed stance)
+          # E402: module level import not at top (required for sys.path manipulation)
+          # F401: unused import (checked in __init__.py re-exports)
+          flake8 . \
+            --exclude=lib/,__pycache__,.venv,venv \
+            --max-line-length=120 \
+            --ignore=E501,W503,E402,F401 \
+            --count \
+            --show-source \
+            --statistics
+
+      - name: Check for syntax errors
+        run: |
+          # Fail on syntax errors or undefined names only
+          flake8 . \
+            --exclude=lib/,__pycache__,.venv,venv \
+            --select=E9,F63,F7,F82 \
+            --show-source \
+            --statistics

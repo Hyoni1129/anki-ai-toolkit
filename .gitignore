@@ -1,8 +1,11 @@
 Reference/*
 
-# User specific config
+# User specific config and runtime data
 api_keys.json
 api_stats.json
+meta.json
+progress_state_*.json
+job_history/
 
 # Python
 __pycache__/

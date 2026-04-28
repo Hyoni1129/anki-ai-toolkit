@@ -7,8 +7,8 @@ Combines three powerful features into a single add-on:
 2. AI Image Generation - Visual flashcard images using Gemini Imagen
 3. AI Sentence Generation - Example sentences for vocabulary learning
 
-Copyright (c) 2025 Stella Anki Team
-License: AGPL-3.0
+Copyright (c) 2026 JeongHan Lee
+License: CC BY-NC-SA 4.0
 
 Usage:
     This add-on is automatically initialized when Anki starts.

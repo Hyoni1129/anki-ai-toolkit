@@ -30,6 +30,7 @@ from aqt.utils import showInfo, showWarning, askUser
 
 from ..core.logger import get_logger
 from ..core.api_key_manager import get_api_key_manager
+from ..core.job_history import JobHistoryManager
 from ..core.preview_models import PreviewResult
 from ..config.settings import ConfigManager
 from ..sentence.progress_state import ProgressStateManager
@@ -89,11 +90,16 @@ class DeckOperationDialog(QDialog):
         self._key_manager = get_api_key_manager(self._addon_dir)
         self._thread_pool = QThreadPool.globalInstance()
         self._progress_manager = ProgressStateManager(self._addon_dir, operation="deck")
+        self._history_manager = JobHistoryManager(self._addon_dir)
         
         # Current state
         self._current_deck = ""
         self._current_deck_id: Optional[int] = None  # Track deck ID for progress operations
         self._pending_deck_id: Optional[int] = None  # Track deck with pending operations to resume
+        self._active_job_id: Optional[str] = None
+        self._active_job_operation: Optional[str] = None
+        self._suppress_deck_warnings = False
+        self._updating_field_dropdowns = False
         self._current_fields: List[str] = []
         self._active_worker = None
         self._cancel_event = threading.Event()
@@ -117,6 +123,9 @@ class DeckOperationDialog(QDialog):
         self._language_dropdown: Optional[QComboBox] = None
         self._model_dropdown: Optional[QComboBox] = None
         self._style_dropdown: Optional[QComboBox] = None
+        self._history_job_dropdown: Optional[QComboBox] = None
+        self._history_detail_text: Optional[QTextEdit] = None
+        self._history_overwrite_cb: Optional[QCheckBox] = None
         self._prompt_edit: Optional[QTextEdit] = None
         self._batch_size_spin: Optional[QSpinBox] = None
         self._delay_spin: Optional[QSpinBox] = None
@@ -134,6 +143,7 @@ class DeckOperationDialog(QDialog):
         self._setup_ui()
         logger.info("DeckOperationDialog __init__: _setup_ui completed, calling _load_decks...")
         self._load_decks()
+        self._refresh_history_jobs()
         self._check_pending_operations()
         logger.info("DeckOperationDialog initialized")
     
@@ -219,6 +229,10 @@ class DeckOperationDialog(QDialog):
         # Image Tab
         image_tab = self._create_image_tab()
         tab_widget.addTab(image_tab, "🖼️ Images")
+
+        # History Tab
+        history_tab = self._create_history_tab()
+        tab_widget.addTab(history_tab, "🗂 History")
         
         # Settings Tab
         settings_tab = self._create_settings_tab()
@@ -284,6 +298,21 @@ class DeckOperationDialog(QDialog):
         
         # Connect deck change signal now that all tabs/widgets are created
         self._deck_dropdown.currentTextChanged.connect(self._on_deck_changed)
+
+        # Persist field mappings on user changes
+        field_dropdowns = [
+            self._source_dropdown,
+            self._context_dropdown,
+            self._dest_dropdown,
+            self._sentence_word_dropdown,
+            self._sentence_field_dropdown,
+            self._sentence_trans_dropdown,
+            self._image_word_dropdown,
+            self._image_field_dropdown,
+        ]
+        for dropdown in field_dropdowns:
+            if dropdown is not None:
+                dropdown.currentTextChanged.connect(self._on_field_mapping_changed)
         
         # Debug: Verify all dropdowns are created at end of _setup_ui
         logger.info(f"_setup_ui complete. Dropdown status: "
@@ -824,6 +853,156 @@ class DeckOperationDialog(QDialog):
         
         layout.addStretch()
         return tab
+
+    def _create_history_tab(self) -> QWidget:
+        """Create API result history tab."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        header = QLabel("Saved Job History")
+        header.setStyleSheet(STYLE_HEADER)
+        layout.addWidget(header)
+
+        desc = QLabel(
+            "Review past API outputs and reinsert them into notes later. "
+            "Images are stored with their generated assets."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #666;")
+        layout.addWidget(desc)
+
+        select_row = QHBoxLayout()
+        select_row.addWidget(QLabel("Job:"))
+        self._history_job_dropdown = QComboBox()
+        self._history_job_dropdown.currentIndexChanged.connect(self._on_history_job_changed)
+        select_row.addWidget(self._history_job_dropdown, 1)
+
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.clicked.connect(self._refresh_history_jobs)
+        select_row.addWidget(refresh_btn)
+        layout.addLayout(select_row)
+
+        self._history_detail_text = QTextEdit()
+        self._history_detail_text.setReadOnly(True)
+        self._history_detail_text.setPlaceholderText("Select a job to view details...")
+        layout.addWidget(self._history_detail_text, 1)
+
+        controls_row = QHBoxLayout()
+        self._history_overwrite_cb = QCheckBox("Overwrite existing field content")
+        self._history_overwrite_cb.setChecked(True)
+        controls_row.addWidget(self._history_overwrite_cb)
+
+        reinsert_btn = QPushButton("Reinsert Selected Job")
+        reinsert_btn.setStyleSheet(STYLE_PRIMARY_BTN)
+        reinsert_btn.clicked.connect(self._reinsert_selected_job)
+        controls_row.addWidget(reinsert_btn)
+        controls_row.addStretch()
+        layout.addLayout(controls_row)
+
+        return tab
+
+    def _refresh_history_jobs(self) -> None:
+        """Reload history jobs into the history dropdown."""
+        if not self._history_job_dropdown:
+            return
+
+        jobs = self._history_manager.list_jobs(limit=300)
+
+        self._history_job_dropdown.blockSignals(True)
+        self._history_job_dropdown.clear()
+
+        if not jobs:
+            self._history_job_dropdown.addItem("(No saved jobs)", "")
+        else:
+            for job in jobs:
+                display = (
+                    f"[{job.get('started_at', '')}] "
+                    f"{job.get('operation', 'unknown')} | "
+                    f"{job.get('deck_name', '')} | "
+                    f"{job.get('success', 0)}/{job.get('total', 0)}"
+                )
+                self._history_job_dropdown.addItem(display, job.get("job_id", ""))
+
+        self._history_job_dropdown.blockSignals(False)
+        self._on_history_job_changed()
+
+    def _on_history_job_changed(self) -> None:
+        """Show details for selected history job."""
+        if not self._history_job_dropdown or not self._history_detail_text:
+            return
+
+        job_id = self._history_job_dropdown.currentData()
+        if not job_id:
+            self._history_detail_text.setPlainText("No history job selected.")
+            return
+
+        job = self._history_manager.get_job(str(job_id))
+        if not job:
+            self._history_detail_text.setPlainText("Selected job could not be loaded.")
+            return
+
+        summary = job.get("summary", {})
+        items = job.get("items", [])
+        settings = job.get("settings", {})
+        preview_items = items[:10] if isinstance(items, list) else []
+
+        lines = [
+            f"Job ID: {job.get('job_id', '')}",
+            f"Operation: {job.get('operation', '')}",
+            f"Deck: {job.get('deck_name', '')}",
+            f"Started: {job.get('started_at', '')}",
+            f"Completed: {job.get('completed_at', '')}",
+            f"Status: {job.get('status', '')}",
+            "",
+            "Summary:",
+            f"  Total: {summary.get('total', 0)}",
+            f"  Success: {summary.get('success', 0)}",
+            f"  Failure: {summary.get('failure', 0)}",
+            "",
+            f"Settings: {settings}",
+            "",
+            "Recent items:",
+        ]
+
+        for item in preview_items:
+            lines.append(
+                f"- note_id={item.get('note_id')} | field={item.get('target_field')} | "
+                f"status={item.get('insert_status')} | error={item.get('insert_error', '')}"
+            )
+
+        if isinstance(items, list) and len(items) > len(preview_items):
+            lines.append(f"... ({len(items) - len(preview_items)} more items)")
+
+        self._history_detail_text.setPlainText("\n".join(lines))
+
+    def _reinsert_selected_job(self) -> None:
+        """Reinsert selected history job outputs into notes."""
+        if not self._history_job_dropdown:
+            return
+
+        job_id = self._history_job_dropdown.currentData()
+        if not job_id:
+            showWarning("Please select a saved job first.")
+            return
+
+        overwrite = bool(self._history_overwrite_cb and self._history_overwrite_cb.isChecked())
+
+        if not askUser(
+            "Reinsert all saved outputs from this job?\n\n"
+            f"Overwrite existing content: {'Yes' if overwrite else 'No'}"
+        ):
+            return
+
+        result = self._history_manager.reinsert_job(str(job_id), overwrite=overwrite)
+        showInfo(
+            "Reinsert complete.\n\n"
+            f"✅ Success: {result.get('success', 0)}\n"
+            f"❌ Failed: {result.get('failed', 0)}\n"
+            f"⏭ Skipped: {result.get('skipped', 0)}\n"
+            f"📊 Total: {result.get('total', 0)}"
+        )
+
+        self._refresh_history_jobs()
     
     # ========== Deck Management ==========
     
@@ -836,16 +1015,15 @@ class DeckOperationDialog(QDialog):
             return
         
         deck_names = []
-        # Modern Anki (24.02+): Use mw.col.decks.all() instead of all_names_and_ids()
         for deck in mw.col.decks.all():
             deck_name = deck['name']
-            # Modern Anki: Use find_cards instead of cids()
-            # quote the deck name to handle spaces
-            query = f'"deck:{deck_name}"'
-            card_ids = mw.col.find_cards(query)
+            deck_id = deck.get("id")
+            card_ids, used_query = self._find_cards_for_deck(deck_name, deck_id)
             
             if card_ids:  # Only include decks with cards
                 deck_names.append(deck_name)
+            else:
+                logger.debug(f"No cards found for deck '{deck_name}' using query '{used_query}'")
         
         # Sort alphabetically
         deck_names.sort()
@@ -873,7 +1051,9 @@ class DeckOperationDialog(QDialog):
         logger.info(f"Initial deck selection: '{current_deck}'")
         
         if current_deck and current_deck != "(No decks with cards)":
+            self._suppress_deck_warnings = True
             self._on_deck_changed(current_deck)
+            self._suppress_deck_warnings = False
     
     def _on_deck_changed(self, deck_name: str) -> None:
         """Handle deck selection change."""
@@ -886,44 +1066,25 @@ class DeckOperationDialog(QDialog):
         if not mw or not mw.col:
             logger.warning("mw or mw.col not available")
             return
+
+        if deck_name == "(No decks with cards)":
+            self._clear_field_dropdowns()
+            return
         
         self._current_deck = deck_name
+        self._persist_current_deck_selection()
         
         # Get fields from first card in deck
         try:
-            # Robust deck ID lookup
-            deck_id = None
-            if hasattr(mw.col.decks, 'id_for_name'):
-                deck_id = mw.col.decks.id_for_name(deck_name)
-            elif hasattr(mw.col.decks, 'by_name'): # Try by_name if id_for_name missing
-                d = mw.col.decks.by_name(deck_name)
-                if d:
-                    deck_id = d.get('id')
-            
-            if deck_id is None:
-                # Fallback to .id() - creates if missing, but we need ID
-                deck_id = mw.col.decks.id(deck_name)
-            
+            deck_id = self._resolve_deck_id(deck_name)
             self._current_deck_id = deck_id
-            logger.info(f"Resolved Deck ID: {deck_id}")
-
-            # Modern Anki Search Strategy:
-            # Prefer searching by DID (deck id) which is safer than name matching
-            if deck_id:
-                query = f"did:{deck_id}"
-            else:
-                # Fallback to name search if ID somehow failed
-                query = f'"deck:{deck_name}"'
-
-            card_ids = mw.col.find_cards(query)
+            card_ids, query = self._find_cards_for_deck(deck_name, deck_id)
             logger.info(f"Found {len(card_ids)} cards using query: {query}")
             
             if not card_ids:
                 msg = f"No cards found in deck '{deck_name}' (ID: {deck_id}).\nQuery used: {query}\n\nCannot retrieve fields."
                 logger.warning(msg)
-                # Only show warning if user actually selected a deck that claims to have cards
-                # but find_cards returned empty (rare sync edge case)
-                if deck_name != "(No decks with cards)":
+                if not self._suppress_deck_warnings:
                     showWarning(msg)
                 self._clear_field_dropdowns()
                 return
@@ -948,46 +1109,138 @@ class DeckOperationDialog(QDialog):
             
         except Exception as e:
             logger.error(f"Error loading deck fields: {e}", exc_info=True)
-            showWarning(f"Failed to load deck fields:\n{str(e)}")
+            if not self._suppress_deck_warnings:
+                showWarning(f"Failed to load deck fields:\n{str(e)}")
             self._status_label.setText(f"Error: {e}")
             self._clear_field_dropdowns()
+
+    def _resolve_deck_id(self, deck_name: str) -> Optional[int]:
+        """Resolve deck ID from name without creating new decks."""
+        if not mw or not mw.col:
+            return None
+
+        try:
+            if hasattr(mw.col.decks, "id_for_name"):
+                deck_id = mw.col.decks.id_for_name(deck_name)
+                if deck_id:
+                    return deck_id
+        except Exception:
+            pass
+
+        try:
+            if hasattr(mw.col.decks, "by_name"):
+                deck_info = mw.col.decks.by_name(deck_name)
+                if deck_info:
+                    return deck_info.get("id")
+        except Exception:
+            pass
+
+        return None
+
+    def _find_cards_for_deck(self, deck_name: str, deck_id: Optional[int]) -> tuple[List[int], str]:
+        """Find cards using robust fallback strategy."""
+        safe_deck_name = deck_name.replace('"', '\\"')
+        queries: List[str] = []
+        if deck_id:
+            queries.append(f"did:{deck_id}")
+        queries.append(f'"deck:{safe_deck_name}"')
+
+        last_query = ""
+        for query in queries:
+            last_query = query
+            try:
+                card_ids = mw.col.find_cards(query)
+            except Exception as exc:
+                logger.warning(f"Deck query failed ({query}): {exc}")
+                continue
+
+            if card_ids:
+                return card_ids, query
+
+        return [], last_query
+
+    def _persist_current_deck_selection(self) -> None:
+        """Persist selected deck in config."""
+        try:
+            self._config_manager.config.deck = self._current_deck
+            self._config_manager.save()
+        except Exception as exc:
+            logger.warning(f"Failed to persist selected deck: {exc}")
     
     def _update_field_dropdowns(self, fields: List[str]) -> None:
         """Update all field dropdown menus."""
         logger.info(f"Updating field dropdowns with {len(fields)} fields: {fields}")
-        
-        # Helper function to safely update a dropdown
-        def update_dropdown(dropdown: Optional[QComboBox], name: str, add_none_option: bool = False) -> bool:
-            if dropdown is not None:
-                dropdown.clear()
-                if add_none_option:
-                    dropdown.addItem(TEXT_NONE_OPTION)
-                dropdown.addItems(fields)
-                dropdown.setEnabled(True)
-                logger.debug(f"Enabled {name} dropdown with {dropdown.count()} items")
-                return True
-            else:
-                logger.warning(f"{name} dropdown is None!")
-                return False
-        
-        # Translation tab - use direct attribute access
-        update_dropdown(self._source_dropdown, "Translation source")
-        update_dropdown(self._context_dropdown, "Translation context", add_none_option=True)
-        update_dropdown(self._dest_dropdown, "Translation dest")
-        
-        # Sentence tab
-        update_dropdown(self._sentence_word_dropdown, "Sentence word")
-        update_dropdown(self._sentence_field_dropdown, "Sentence field")
-        update_dropdown(self._sentence_trans_dropdown, "Sentence trans")
-        
-        # Image tab
-        update_dropdown(self._image_word_dropdown, "Image word")
-        update_dropdown(self._image_field_dropdown, "Image field")
-        
-        logger.info("Field dropdowns updated successfully")
-        
-        # Try to restore saved field selections
-        self._restore_field_selections(fields)
+        self._updating_field_dropdowns = True
+        try:
+            # Helper function to safely update a dropdown
+            def update_dropdown(dropdown: Optional[QComboBox], name: str, add_none_option: bool = False) -> bool:
+                if dropdown is not None:
+                    dropdown.clear()
+                    if add_none_option:
+                        dropdown.addItem(TEXT_NONE_OPTION)
+                    dropdown.addItems(fields)
+                    dropdown.setEnabled(True)
+                    logger.debug(f"Enabled {name} dropdown with {dropdown.count()} items")
+                    return True
+                else:
+                    logger.warning(f"{name} dropdown is None!")
+                    return False
+            
+            # Translation tab - use direct attribute access
+            update_dropdown(self._source_dropdown, "Translation source")
+            update_dropdown(self._context_dropdown, "Translation context", add_none_option=True)
+            update_dropdown(self._dest_dropdown, "Translation dest")
+            
+            # Sentence tab
+            update_dropdown(self._sentence_word_dropdown, "Sentence word")
+            update_dropdown(self._sentence_field_dropdown, "Sentence field")
+            update_dropdown(self._sentence_trans_dropdown, "Sentence trans")
+            
+            # Image tab
+            update_dropdown(self._image_word_dropdown, "Image word")
+            update_dropdown(self._image_field_dropdown, "Image field")
+            
+            logger.info("Field dropdowns updated successfully")
+            
+            # Try to restore saved field selections
+            self._restore_field_selections(fields)
+        finally:
+            self._updating_field_dropdowns = False
+
+    def _on_field_mapping_changed(self, _value: str) -> None:
+        """Persist field mapping changes when user updates dropdowns."""
+        if self._updating_field_dropdowns:
+            return
+
+        try:
+            config = self._config_manager.config
+
+            if self._source_dropdown is not None:
+                config.translation.source_field = self._source_dropdown.currentText()
+            if self._context_dropdown is not None:
+                context = self._context_dropdown.currentText()
+                config.translation.context_field = "" if context == TEXT_NONE_OPTION else context
+            if self._dest_dropdown is not None:
+                config.translation.destination_field = self._dest_dropdown.currentText()
+
+            if self._sentence_word_dropdown is not None:
+                config.sentence.expression_field = self._sentence_word_dropdown.currentText()
+            if self._sentence_field_dropdown is not None:
+                config.sentence.sentence_field = self._sentence_field_dropdown.currentText()
+            if self._sentence_trans_dropdown is not None:
+                config.sentence.translation_field = self._sentence_trans_dropdown.currentText()
+
+            if self._image_word_dropdown is not None:
+                config.image.word_field = self._image_word_dropdown.currentText()
+            if self._image_field_dropdown is not None:
+                config.image.image_field = self._image_field_dropdown.currentText()
+
+            if self._current_deck:
+                config.deck = self._current_deck
+
+            self._config_manager.save()
+        except Exception as exc:
+            logger.warning(f"Failed to persist field mapping changes: {exc}")
     
     def _restore_field_selections(self, fields: List[str]) -> None:
         """Restore previously saved field selections."""
@@ -1017,7 +1270,16 @@ class DeckOperationDialog(QDialog):
         self, dropdown: Optional[QComboBox], field_value: str, fields: List[str]
     ) -> None:
         """Restore a single dropdown selection if valid."""
-        if dropdown and field_value in fields:
+        if not dropdown:
+            return
+
+        if dropdown is self._context_dropdown and not field_value:
+            none_idx = dropdown.findText(TEXT_NONE_OPTION)
+            if none_idx >= 0:
+                dropdown.setCurrentIndex(none_idx)
+            return
+
+        if field_value in fields:
             dropdown.setCurrentText(field_value)
     
     def _clear_field_dropdowns(self) -> None:
@@ -1053,9 +1315,8 @@ class DeckOperationDialog(QDialog):
             return []
         
         try:
-            # Modern Anki: Use find_cards
-            query = f'"deck:{self._current_deck}"'
-            card_ids = mw.col.find_cards(query)
+            card_ids, query = self._find_cards_for_deck(self._current_deck, self._current_deck_id)
+            logger.info(f"Collecting notes from deck '{self._current_deck}' using query: {query}")
             
             notes_data = []
             seen_notes: Set[int] = set()
@@ -1445,7 +1706,7 @@ class DeckOperationDialog(QDialog):
         dest_field: str
     ) -> None:
         """Start a batch operation with progress tracking."""
-        from ..translation.batch_translator import BatchTranslator, BatchTranslationSignals
+        from ..translation.batch_translator import BatchTranslator
         
         # Reset state
         self._cancel_event.clear()
@@ -1464,6 +1725,20 @@ class DeckOperationDialog(QDialog):
         # Disable buttons
         self._translate_btn.setEnabled(False)
         self._stop_btn.setEnabled(True)
+
+        self._start_history_job(
+            operation_type=operation_type,
+            settings={
+                "deck": self._current_deck,
+                "target_field": dest_field,
+                "source_field": self._source_dropdown.currentText() if self._source_dropdown else "",
+                "context_field": self._context_dropdown.currentText() if self._context_dropdown else "",
+                "target_language": self._language_dropdown.currentText() if self._language_dropdown else "",
+                "model": self._model_dropdown.currentText() if self._model_dropdown else "",
+                "batch_size": self._batch_size_spin.value() if self._batch_size_spin else 0,
+                "delay_seconds": self._delay_spin.value() if self._delay_spin else 0,
+            },
+        )
         
         # Create worker
         worker = BatchTranslator(
@@ -1483,6 +1758,7 @@ class DeckOperationDialog(QDialog):
         worker.signals.error_detail.connect(self._on_error_detail)
         worker.signals.finished.connect(self._on_finished)
         worker.signals.error.connect(self._on_error)
+        worker.signals.batch_results.connect(self._on_translation_batch_results)
         
         self._active_worker = worker
         self._thread_pool.start(worker)
@@ -1510,6 +1786,12 @@ class DeckOperationDialog(QDialog):
     
     def _on_error(self, error: str) -> None:
         """Handle critical error."""
+        total = self._success_count + self._failure_count
+        self._finish_active_history_job(
+            success=self._success_count,
+            failure=self._failure_count,
+            total=total,
+        )
         showWarning(f"Operation error:\n{error}")
     
     def _on_finished(self, success: int, failure: int) -> None:
@@ -1523,6 +1805,7 @@ class DeckOperationDialog(QDialog):
         # Show results
         total = success + failure
         self._status_label.setText(f"Completed: {success} success, {failure} failed")
+        self._finish_active_history_job(success=success, failure=failure, total=total)
         
         showInfo(
             f"Operation Complete!\n\n"
@@ -1530,6 +1813,76 @@ class DeckOperationDialog(QDialog):
             f"❌ Failed: {failure}\n"
             f"📊 Total: {total}"
         )
+
+    def _start_history_job(self, operation_type: str, settings: Optional[Dict[str, Any]] = None) -> None:
+        """Start a persistent history job for current batch."""
+        if self._active_job_id:
+            total = self._success_count + self._failure_count
+            self._finish_active_history_job(self._success_count, self._failure_count, total)
+
+        try:
+            self._active_job_id = self._history_manager.start_job(
+                operation=operation_type,
+                deck_id=self._current_deck_id,
+                deck_name=self._current_deck,
+                settings=settings or {},
+            )
+            self._active_job_operation = operation_type
+        except Exception as exc:
+            logger.error(f"Failed to start history job: {exc}")
+            self._active_job_id = None
+            self._active_job_operation = None
+
+    def _append_history_items(self, items: List[Dict[str, Any]]) -> None:
+        """Append items to active history job if available."""
+        if not self._active_job_id or not items:
+            return
+
+        try:
+            self._history_manager.append_items(self._active_job_id, items)
+        except Exception as exc:
+            logger.error(f"Failed to append history items: {exc}")
+
+    def _finish_active_history_job(self, success: int, failure: int, total: int) -> None:
+        """Finalize active history job summary."""
+        if not self._active_job_id:
+            return
+
+        try:
+            self._history_manager.finish_job(
+                self._active_job_id,
+                {
+                    "success": success,
+                    "failure": failure,
+                    "total": total,
+                },
+            )
+        except Exception as exc:
+            logger.error(f"Failed to finish history job: {exc}")
+        finally:
+            self._active_job_id = None
+            self._active_job_operation = None
+            self._refresh_history_jobs()
+
+    def _on_translation_batch_results(self, batch_results: List[Dict[str, Any]]) -> None:
+        """Persist per-note translation results to history."""
+        if not batch_results or self._active_job_operation != "translation":
+            return
+
+        history_items: List[Dict[str, Any]] = []
+        for result in batch_results:
+            history_items.append(
+                {
+                    "note_id": result.get("note_id"),
+                    "source_text": result.get("word", ""),
+                    "target_field": result.get("target_field", ""),
+                    "api_output": result.get("translation", ""),
+                    "insert_status": result.get("insert_status", "failed"),
+                    "insert_error": result.get("insert_error", ""),
+                }
+            )
+
+        self._append_history_items(history_items)
     
     def _stop_operation(self) -> None:
         """Stop the current operation."""
@@ -1698,7 +2051,7 @@ class DeckOperationDialog(QDialog):
         # Sample 3 random notes
         sample_size = min(3, len(notes_data))
         sample_notes_data = random.sample(notes_data, sample_size)
-        sample_nids = [d['parsed_nid'] for d in sample_notes_data]
+        sample_nids = [d['note_id'] for d in sample_notes_data]
         
         # 3. Generate Previews (Blocking with Progress Dialog)
         progress = QProgressDialog("Generating previews...", "Cancel", 0, sample_size, self)
@@ -1910,6 +2263,19 @@ class DeckOperationDialog(QDialog):
         self._sentence_btn.setEnabled(False)
         self._stop_sentence_btn.setEnabled(True)
         self._init_sentence_progress(notes_data)
+        self._start_history_job(
+            operation_type="sentence",
+            settings={
+                "deck": self._current_deck,
+                "word_field": word_field,
+                "sentence_field": sentence_field,
+                "translation_field": trans_field,
+                "sentence_language": language,
+                "translation_language": translation_language,
+                "difficulty": difficulty,
+                "highlight": highlight,
+            },
+        )
         
         # Process notes
         success, failure = self._process_sentence_notes(
@@ -2000,6 +2366,19 @@ class DeckOperationDialog(QDialog):
             if trans_field and trans_field in note:
                 note[trans_field] = translation
             mw.col.update_note(note)
+
+            self._append_history_items([
+                {
+                    "note_id": note_id,
+                    "source_text": word,
+                    "target_field": sentence_field,
+                    "api_output": sentence,
+                    "secondary_field": trans_field,
+                    "secondary_output": translation,
+                    "insert_status": "success",
+                    "insert_error": "",
+                }
+            ])
             
             if self._current_deck_id is not None:
                 self._progress_manager.mark_success(self._current_deck_id, note_id)
@@ -2008,6 +2387,18 @@ class DeckOperationDialog(QDialog):
             
         except Exception as e:
             logger.error(f"Sentence generation failed for '{word}': {e}")
+            self._append_history_items([
+                {
+                    "note_id": note_id,
+                    "source_text": word,
+                    "target_field": sentence_field,
+                    "api_output": "",
+                    "secondary_field": trans_field,
+                    "secondary_output": "",
+                    "insert_status": "failed",
+                    "insert_error": str(e),
+                }
+            ])
             if self._current_deck_id is not None:
                 self._progress_manager.mark_failure(self._current_deck_id, note_id, str(e))
             self._key_manager.record_failure(str(e))
@@ -2128,6 +2519,15 @@ class DeckOperationDialog(QDialog):
         self._image_btn.setEnabled(False)
         self._stop_image_btn.setEnabled(True)
         self._init_image_progress(notes_data)
+        self._start_history_job(
+            operation_type="image",
+            settings={
+                "deck": self._current_deck,
+                "word_field": word_field,
+                "image_field": image_field,
+                "style": style,
+            },
+        )
         
         # Process notes
         success, failure = self._process_image_notes(
@@ -2216,20 +2616,65 @@ class DeckOperationDialog(QDialog):
             result = image_gen.generate_image(prompt=prompt, word=word)
             
             if result.success and result.image_data:
-                return self._save_generated_image(note, note_id, image_field, word, result, media_mgr)
+                asset_path = ""
+                if self._active_job_id:
+                    try:
+                        asset_path = self._history_manager.save_image_asset(
+                            job_id=self._active_job_id,
+                            note_id=note_id,
+                            image_data=result.image_data,
+                            extension=".png",
+                        )
+                    except Exception as exc:
+                        logger.warning(f"Failed to persist image asset for history: {exc}")
+
+                saved, save_error = self._save_generated_image(note, note_id, image_field, word, result, media_mgr)
+                self._append_history_items([
+                    {
+                        "note_id": note_id,
+                        "source_text": word,
+                        "target_field": image_field,
+                        "api_output": "[image]",
+                        "asset_path": asset_path,
+                        "insert_status": "success" if saved else "failed",
+                        "insert_error": save_error,
+                    }
+                ])
+                return saved
             else:
-                self._mark_image_failure(note_id, result.error or "Generation failed")
+                error_message = result.error or "Generation failed"
+                self._mark_image_failure(note_id, error_message)
+                self._append_history_items([
+                    {
+                        "note_id": note_id,
+                        "source_text": word,
+                        "target_field": image_field,
+                        "api_output": "",
+                        "insert_status": "failed",
+                        "insert_error": error_message,
+                    }
+                ])
                 return False
                 
         except Exception as e:
             logger.error(f"Image generation failed for '{word}': {e}")
             self._mark_image_failure(note_id, str(e))
+            self._append_history_items([
+                {
+                    "note_id": note_id,
+                    "source_text": word,
+                    "target_field": image_field,
+                    "api_output": "",
+                    "insert_status": "failed",
+                    "insert_error": str(e),
+                }
+            ])
             return False
     
     def _save_generated_image(
         self, note, note_id: int, image_field: str, word: str, result, media_mgr
-    ) -> bool:
-        """Save generated image to note. Returns True on success."""
+    ) -> tuple[bool, str]:
+        """Save generated image to note. Returns (success, error)."""
         media_result = media_mgr.add_image_from_bytes(
             image_data=result.image_data, word=word, extension=".png"
         )
@@ -2240,11 +2685,12 @@ class DeckOperationDialog(QDialog):
             if self._current_deck_id is not None:
                 self._progress_manager.mark_success(self._current_deck_id, note_id)
             self._key_manager.record_success("image")
-            return True
+            return True, ""
         else:
-            self._mark_image_failure(note_id, media_result.error or "Save failed")
-            logger.warning(f"Failed to save image: {media_result.error}")
-            return False
+            error_message = media_result.error or "Save failed"
+            self._mark_image_failure(note_id, error_message)
+            logger.warning(f"Failed to save image: {error_message}")
+            return False, error_message
     
     def _mark_image_failure(self, note_id: int, error: str) -> None:
         """Mark image generation failure in progress state."""
