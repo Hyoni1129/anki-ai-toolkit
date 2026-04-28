@@ -2,7 +2,7 @@
 
 <img src="docs/Stella_Icon.png" alt="Stella Icon" width="100" height="100">
 
-# Stella Anki All-in-One Addon
+# Anki AI Toolkit
 
 [![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/)
 [![Anki](https://img.shields.io/badge/Anki-2.1.50%2B-blue.svg)](https://apps.ankiweb.net/)
@@ -41,7 +41,7 @@ All three share the same **API key pool**, so you can add up to 15 Gemini keys a
 # Windows: %APPDATA%\Anki2\addons21\
 # macOS:   ~/Library/Application Support/Anki2/addons21/
 
-git clone https://github.com/Hyoni1129/Stella_Anki_All_in_one_Addon.git
+git clone https://github.com/Hyoni1129/anki-ai-toolkit.git
 ```
 
 Then restart Anki. The add-on will appear in the menubar.
@@ -79,14 +79,14 @@ This is an early-stage project I'm building for personal use and sharing openly.
 - Some settings dialog options don't save correctly yet
 - Batch job resume logic is partially tested
 
-If something breaks, please [open an issue](https://github.com/Hyoni1129/Stella_Anki_All_in_one_Addon/issues) with your Anki version and any error messages from the debug console.
+If something breaks, please [open an issue](https://github.com/Hyoni1129/anki-ai-toolkit/issues) with your Anki version and any error messages from the debug console.
 
 ---
 
 ## Project Structure
 
 ```
-Stella_Anki_All_in_one_Addon/
+anki-ai-toolkit/
 ├── __init__.py          # Entry point
 ├── config.json          # Default config
 ├── core/                # API key manager, Gemini client, logging
@@ -108,7 +108,7 @@ Contributions are very welcome — especially bug reports and fixes while the pr
 
 ## License
 
-**Stella Anki All-in-One Addon © 2026 JeongHan Lee** — licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/).
+**Anki AI Toolkit © 2026 JeongHan Lee** — licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/).
 
 Free to share and adapt for non-commercial purposes with attribution.
 

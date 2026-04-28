@@ -1,6 +1,6 @@
-# Stella Anki Tools - AI Coding Assistant Instructions
+# Anki AI Toolkit - AI Coding Assistant Instructions
 
-This Document outlines the architecture, conventions, and developer workflows for the Stella Anki Tools project. Use this context to guide your code generation and analysis.
+This Document outlines the architecture, conventions, and developer workflows for the Anki AI Toolkit project. Use this context to guide your code generation and analysis.
 
 ## 🏗 Project Architecture
 

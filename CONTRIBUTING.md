@@ -1,4 +1,4 @@
-# Contributing to Stella Anki All-in-One Addon
+# Contributing to Anki AI Toolkit
 
 Thanks for your interest in contributing! This project is in early development, so there's a lot to improve. Whether you're reporting a bug, fixing something, or suggesting a feature — all of it is appreciated.
 
@@ -6,7 +6,7 @@ Thanks for your interest in contributing! This project is in early development, 
 
 ## ⚠️ Important: Early Development Notice
 
-This add-on is **not yet stable**. Some features are partially implemented, some settings don't persist correctly, and the codebase is still being restructured. If you're looking for a quick win, check the [Issues](https://github.com/Hyoni1129/Stella_Anki_All_in_one_Addon/issues) tab for things tagged `good first issue` or `bug`.
+This add-on is **not yet stable**. Some features are partially implemented, some settings don't persist correctly, and the codebase is still being restructured. If you're looking for a quick win, check the [Issues](https://github.com/Hyoni1129/anki-ai-toolkit/issues) tab for things tagged `good first issue` or `bug`.
 
 ---
 
@@ -64,11 +64,11 @@ The simplest approach is to clone directly into your Anki add-ons folder:
 ```bash
 # Windows
 cd %APPDATA%\Anki2\addons21\
-git clone https://github.com/Hyoni1129/Stella_Anki_All_in_one_Addon.git
+git clone https://github.com/Hyoni1129/anki-ai-toolkit.git
 
 # macOS
 cd ~/Library/Application\ Support/Anki2/addons21/
-git clone https://github.com/Hyoni1129/Stella_Anki_All_in_one_Addon.git
+git clone https://github.com/Hyoni1129/anki-ai-toolkit.git
 ```
 
 Restart Anki and the add-on will load. You can then edit files in the cloned folder and restart Anki to see changes.
@@ -155,4 +155,4 @@ Keep the first line under 72 characters. Add more detail in the body if needed.
 
 ## Questions?
 
-Open an [issue](https://github.com/Hyoni1129/Stella_Anki_All_in_one_Addon/issues) and tag it `question`. I'll try to respond when I can.
+Open an [issue](https://github.com/Hyoni1129/anki-ai-toolkit/issues) and tag it `question`. I'll try to respond when I can.

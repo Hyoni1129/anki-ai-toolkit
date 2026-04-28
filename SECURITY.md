@@ -11,7 +11,7 @@
 If you discover a security vulnerability in this project, please report it responsibly:
 
 1. **DO NOT** open a public issue for security vulnerabilities
-2. Email the maintainer directly or use [GitHub's private vulnerability reporting](https://github.com/Hyoni1129/Stella_Anki_All_in_one_Addon/security/advisories/new)
+2. Email the maintainer directly or use [GitHub's private vulnerability reporting](https://github.com/Hyoni1129/anki-ai-toolkit/security/advisories/new)
 3. Include a description of the vulnerability and steps to reproduce
 
 ## Known Security Considerations
