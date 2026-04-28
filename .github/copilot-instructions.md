@@ -31,9 +31,9 @@ This is an **Anki add-on** (Python) that unifies three AI-powered features: **Tr
 - **Threading:** Long-running tasks (API calls) **must** run on background threads to avoid freezing the Anki UI. Use `aqt.taskman` or distinct worker threads.
 
 ### API Key Management
-- **Security:** Keys are stored locally in `api_keys.json`.
+- **Security:** Keys are stored locally in `api_keys.json` (`.gitignore`d — never committed).
 - **Rotation:** `APIKeyManager` handles automatic rotation on 429 errors.
-- **Encryption:** Simple XOR-based "encryption" is used for storage (not robust, but obscures keys).
+- **Obfuscation:** XOR-based obfuscation is used for storage. This is NOT encryption — see `SECURITY.md` for details.
 
 ### Testing
 - **Unit Tests:** Located in `tests/`.

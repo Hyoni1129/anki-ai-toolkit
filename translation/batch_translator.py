@@ -33,11 +33,7 @@ if "google" in sys.modules:
         if _google_lib_path not in google.__path__:
             google.__path__.insert(0, _google_lib_path)
 else:
-    # If google module not yet imported, create a namespace package manually
-    import importlib.util
-    if os.path.isdir(_google_lib_path):
-        # Pre-setup the google namespace to include our lib path
-        pass  # The sys.path insertion above should handle this
+    pass  # sys.path insertion above handles namespace resolution
 
 try:
     import google.generativeai as genai

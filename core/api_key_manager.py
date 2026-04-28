@@ -48,10 +48,15 @@ def _derive_encryption_key(password: str, salt: bytes = b"stella_anki_2025") -> 
 
 def _simple_encrypt(data: str, key: bytes) -> str:
     """
-    Simple XOR-based encryption for API keys.
+    Simple XOR-based obfuscation for API keys at rest.
     
-    Note: For production use, consider using cryptography.fernet.Fernet
-    This implementation avoids external dependencies.
+    Security Note (CWE-327):
+        This is NOT cryptographic encryption. It provides only basic obfuscation
+        to prevent accidental exposure of API keys in plaintext config files.
+        The keys are still recoverable by anyone with access to the source code
+        and the config file. For true security, users should rely on environment
+        variables or a system keyring. This trade-off avoids requiring external
+        cryptography dependencies within the Anki add-on sandbox.
     """
     if not data:
         return ""

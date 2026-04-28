@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 import json
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Iterable, Any
 
 from ..core.logger import StellaLogger
@@ -19,7 +19,7 @@ from ..core.logger import StellaLogger
 
 def _utc_timestamp() -> str:
     """Return the current UTC timestamp in ISO-8601 format."""
-    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 class ProgressStateManager:
