@@ -124,4 +124,6 @@ Free to share and adapt for non-commercial purposes with attribution.
 
 **Made by [JeongHan Lee](https://github.com/Hyoni1129)**
 
+[![GitHub](https://img.shields.io/badge/GitHub-100000?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Hyoni1129)
+
 </div>

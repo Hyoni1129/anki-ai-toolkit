@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 
 from ..core.logger import get_logger
 from ..core.api_key_manager import APIKeyManager
-from ..core.utils import classify_error
+from ..core.utils import classify_error, ErrorType
 from ..core.preview_models import PreviewResult
 from ..config.settings import ConfigManager
 
@@ -312,10 +312,11 @@ class ImageGenerator:
     def _handle_image_error(self, error: Exception) -> None:
         """Handle image generation error and potentially rotate keys."""
         error_type, error_msg = classify_error(error)
-        logger.warning(f"Image generation failed: {error_type} - {error_msg}")
+        logger.warning(f"Image generation failed: {error_type.value} - {error_msg}")
         
-        if error_type in ("rate_limit", "quota_exceeded", "auth_error"):
-            rotated, new_key_id = self.key_manager.record_failure(error_type)
+        # Use ErrorType enum for proper comparison (not strings)
+        if error_type in (ErrorType.RATE_LIMIT, ErrorType.QUOTA_EXCEEDED, ErrorType.INVALID_KEY):
+            rotated, new_key_id = self.key_manager.record_failure(str(error))
             if rotated:
                 logger.info(f"Rotated to next API key: {new_key_id}")
                 self._reinitialize_with_new_key()

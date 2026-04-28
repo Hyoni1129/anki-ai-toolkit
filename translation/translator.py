@@ -291,6 +291,8 @@ class Translator:
                 if not translation:
                     raise ValueError("Empty translation in response")
                 
+                translation = self._format_translation_text(translation)
+
                 # Record success
                 self._key_manager.record_success(operation="translation", count=1)
                 
@@ -313,6 +315,43 @@ class Translator:
                     time.sleep(backoff ** attempt)
         
         raise GeminiError(f"Translation failed after {max_retries} attempts: {last_error}")
+
+    def _format_translation_text(self, translation: str) -> str:
+        """
+        Format translation output for clean line breaks.
+
+        Examples:
+            "1. Instruct 2. Teach, explain." -> "Instruct\nTeach, explain"
+        """
+        if not translation:
+            return translation
+
+        text = translation.strip()
+
+        # Split by numbered list patterns (1. / 2) / 1) / 2))
+        numbered_items = [
+            item.strip(" \t\n;-")
+            for item in re.split(r"\s*(?:\d+[\.|\)]\s*)", text)
+            if item.strip()
+        ]
+        if len(numbered_items) > 1:
+            return "\n".join(numbered_items)
+
+        # Split by bullet characters
+        bullet_items = [
+            item.strip(" \t\n;-")
+            for item in re.split(r"[•◦●▪️]", text)
+            if item.strip()
+        ]
+        if len(bullet_items) > 1:
+            return "\n".join(bullet_items)
+
+        # Split by semicolon if used as list separator
+        semi_items = [item.strip() for item in text.split(";") if item.strip()]
+        if len(semi_items) > 1:
+            return "\n".join(semi_items)
+
+        return text
     
     def _parse_translation_response(self, response: str) -> Dict[str, Any]:
         """
