@@ -2,7 +2,7 @@
 
 <img src="docs/Stella_Icon.png" alt="Stella Icon" width="120" height="120">
 
-# 🌟 Stella Anki Tools (v2026)
+# 🌟 Anki AI Toolkit (v2026)
 
 **All-in-One AI-Powered Toolkit for Anki Flashcards**
 
@@ -18,7 +18,7 @@
 
 ## 🎯 About The Project
 
-**Stella Anki Tools** is a comprehensive Anki add-on that combines three powerful AI features into a single, unified package. Powered by **Google Gemini 2.5**, it automates the most time-consuming aspects of flashcard creation:
+**Anki AI Toolkit** is a comprehensive Anki add-on that combines three powerful AI features into a single, unified package. Powered by **Google Gemini 2.5**, it automates the most time-consuming aspects of flashcard creation:
 
 | Feature | Description |
 |---------|-------------|
@@ -81,16 +81,16 @@ Your API keys are sensitive. This add-on stores keys locally and they are **neve
    # Clone into Anki add-ons folder
    # Windows
    cd %APPDATA%\Anki2\addons21\
-   git clone https://github.com/Hyoni1129/Stella_Anki_All_in_one_Addon.git stella_anki_tools
+   git clone https://github.com/Hyoni1129/anki-ai-toolkit.git
 
    # macOS
    cd ~/Library/Application\ Support/Anki2/addons21/
-   git clone https://github.com/Hyoni1129/Stella_Anki_All_in_one_Addon.git stella_anki_tools
+   git clone https://github.com/Hyoni1129/anki-ai-toolkit.git
    ```
 
 2. **Restart Anki**: The add-on loads automatically.
 
-3. **Add API Key**: Go to `Stella` → `Manage API Keys` → Add your Gemini API key.
+3. **Add API Key**: Go to `Anki AI Toolkit` → `Manage API Keys` → Add your Gemini API key.
 
 4. **Start Using**: Open any note and use the toolbar buttons or shortcuts!
 
@@ -100,7 +100,7 @@ Your API keys are sensitive. This add-on stores keys locally and they are **neve
 
 ### 🔧 Configuration
 
-Access settings via `Stella` menu in the menubar:
+Access settings via `Anki AI Toolkit` menu in the menubar:
 
 | Menu Item | Description |
 |-----------|-------------|
@@ -123,7 +123,7 @@ Access settings via `Stella` menu in the menubar:
 
 1. Open **Card Browser**
 2. Select multiple cards
-3. Go to `Stella` menu:
+3. Go to `Anki AI Toolkit` menu:
    - **Translate Selected Notes**
    - **Generate Sentences**
    - **Generate Images**
@@ -177,7 +177,7 @@ Access settings via `Stella` menu in the menubar:
 ## 📁 Project Structure
 
 ```
-stella_anki_tools/
+anki-ai-toolkit/
 ├── 📄 __init__.py              # Entry point & initialization
 ├── 📄 config.json              # Default configuration
 ├── 📄 meta.json                # Anki add-on metadata
@@ -233,7 +233,7 @@ stella_anki_tools/
 
 Enable debug logging in Anki:
 1. Start Anki from terminal: `anki --debug`
-2. Check console for `[Stella]` log messages
+2. Check console for `[Anki AI Toolkit]` log messages
 
 ---
 
@@ -251,17 +251,17 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ```bash
 # Clone the repository
-git clone https://github.com/Hyoni1129/Stella_Anki_All_in_one_Addon.git
+git clone https://github.com/Hyoni1129/anki-ai-toolkit.git
 
 # Link to Anki add-ons folder for testing
-ln -s $(pwd)/stella_anki_tools ~/Library/Application\ Support/Anki2/addons21/
+ln -s $(pwd)/anki-ai-toolkit ~/Library/Application\ Support/Anki2/addons21/
 ```
 
 ---
 
 ## 📜 License
 
-**Stella Anki Tools © 2026 by JeongHan Lee** is licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/).
+**Anki AI Toolkit © 2026 by JeongHan Lee** is licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/).
 
 You are free to:
 - **Share** — copy and redistribute the material
