@@ -118,7 +118,6 @@ Free to share and adapt for non-commercial purposes with attribution.
 
 - [Google Gemini](https://ai.google.dev/) for the AI backbone
 - [Anki](https://apps.ankiweb.net/) for being such a great platform to build on
-- The original projects this is based on: Stella Anki Translator, Anki Image Gen, BunAI Sentence Generator
 
 <div align="center">
 
