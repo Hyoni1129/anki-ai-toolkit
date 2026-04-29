@@ -54,13 +54,6 @@ Then restart Anki. The add-on will appear in the menubar.
 
 ## Usage
 
-### Single card (in the editor)
-
-Open any note and use the toolbar buttons or shortcuts:
-- `Ctrl+Shift+T` — Translate
-- `Ctrl+Shift+S` — Generate sentence
-- `Ctrl+Shift+I` — Generate image
-
 ### Batch processing (in the browser)
 
 Select multiple cards → `Stella` menu → choose an operation. There's a progress dialog with pause/cancel support. Batch jobs can resume if interrupted.
