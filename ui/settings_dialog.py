@@ -917,7 +917,6 @@ class DeckOperationDialog(QDialog):
 
         filter_row.addWidget(QLabel("Job:"))
         self._history_job_dropdown = QComboBox()
-        self._history_job_dropdown.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._history_job_dropdown.currentIndexChanged.connect(self._on_history_job_changed)
         filter_row.addWidget(self._history_job_dropdown, 1)
 
