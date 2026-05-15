@@ -126,6 +126,11 @@ class DeckOperationDialog(QDialog):
         self._history_job_dropdown: Optional[QComboBox] = None
         self._history_detail_text: Optional[QTextEdit] = None
         self._history_overwrite_cb: Optional[QCheckBox] = None
+        self._history_status_filter: Optional[QComboBox] = None
+        self._history_target_override: Optional[QComboBox] = None
+        self._history_secondary_override: Optional[QComboBox] = None
+        self._history_reinsert_btn: Optional[QPushButton] = None
+        self._history_delete_btn: Optional[QPushButton] = None
         self._prompt_edit: Optional[QTextEdit] = None
         self._batch_size_spin: Optional[QSpinBox] = None
         self._delay_spin: Optional[QSpinBox] = None
@@ -885,7 +890,7 @@ class DeckOperationDialog(QDialog):
         return tab
 
     def _create_history_tab(self) -> QWidget:
-        """Create API result history tab."""
+        """Create API result history tab with field override and filtering."""
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
@@ -894,49 +899,120 @@ class DeckOperationDialog(QDialog):
         layout.addWidget(header)
 
         desc = QLabel(
-            "Review past API outputs and reinsert them into notes later. "
-            "Images are stored with their generated assets."
+            "Review past API outputs and reinsert them into notes.\n"
+            "You can redirect outputs to a different field using the override dropdowns below."
         )
         desc.setWordWrap(True)
         desc.setStyleSheet("color: #666;")
         layout.addWidget(desc)
 
-        select_row = QHBoxLayout()
-        select_row.addWidget(QLabel("Job:"))
+        # --- Filter + Job selector row ---
+        filter_row = QHBoxLayout()
+        filter_row.addWidget(QLabel("Status:"))
+        self._history_status_filter = QComboBox()
+        self._history_status_filter.addItems(["All", "completed", "stopped", "running"])
+        self._history_status_filter.setCurrentText("All")
+        self._history_status_filter.currentTextChanged.connect(self._on_history_filter_changed)
+        filter_row.addWidget(self._history_status_filter)
+
+        filter_row.addWidget(QLabel("Job:"))
         self._history_job_dropdown = QComboBox()
+        self._history_job_dropdown.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._history_job_dropdown.currentIndexChanged.connect(self._on_history_job_changed)
-        select_row.addWidget(self._history_job_dropdown, 1)
+        filter_row.addWidget(self._history_job_dropdown, 1)
 
-        refresh_btn = QPushButton("Refresh")
+        refresh_btn = QPushButton("🔄 Refresh")
+        refresh_btn.setToolTip("Reload the list of saved jobs")
         refresh_btn.clicked.connect(self._refresh_history_jobs)
-        select_row.addWidget(refresh_btn)
-        layout.addLayout(select_row)
+        filter_row.addWidget(refresh_btn)
+        layout.addLayout(filter_row)
 
+        # --- Detail view ---
         self._history_detail_text = QTextEdit()
         self._history_detail_text.setReadOnly(True)
         self._history_detail_text.setPlaceholderText("Select a job to view details...")
+        self._history_detail_text.setStyleSheet("font-family: monospace; font-size: 11px;")
         layout.addWidget(self._history_detail_text, 1)
 
-        controls_row = QHBoxLayout()
+        # --- Field override group ---
+        override_group = QGroupBox("Reinsertion Settings")
+        override_layout = QVBoxLayout(override_group)
+
+        override_help = QLabel(
+            "💡 Override the target field to insert saved API outputs into a "
+            "<b>different</b> field than originally configured.\n"
+            "Leave as <i>(Use original)</i> to keep the original field."
+        )
+        override_help.setWordWrap(True)
+        override_help.setStyleSheet(
+            "color: #555; font-size: 11px; padding: 4px; "
+            "background-color: #f5f5f5; border-radius: 4px;"
+        )
+        override_layout.addWidget(override_help)
+
+        target_row = QHBoxLayout()
+        target_row.addWidget(QLabel("Target Field Override:"))
+        self._history_target_override = QComboBox()
+        self._history_target_override.addItem("(Use original)")
+        self._history_target_override.setToolTip(
+            "Select a field to redirect ALL items into, overriding the original target field."
+        )
+        target_row.addWidget(self._history_target_override, 1)
+        override_layout.addLayout(target_row)
+
+        secondary_row = QHBoxLayout()
+        secondary_row.addWidget(QLabel("Secondary Field Override:"))
+        self._history_secondary_override = QComboBox()
+        self._history_secondary_override.addItem("(Use original)")
+        self._history_secondary_override.setToolTip(
+            "Select a field for secondary outputs (e.g. sentence translation)."
+        )
+        secondary_row.addWidget(self._history_secondary_override, 1)
+        override_layout.addLayout(secondary_row)
+
         self._history_overwrite_cb = QCheckBox("Overwrite existing field content")
         self._history_overwrite_cb.setChecked(True)
-        controls_row.addWidget(self._history_overwrite_cb)
+        override_layout.addWidget(self._history_overwrite_cb)
 
-        reinsert_btn = QPushButton("Reinsert Selected Job")
-        reinsert_btn.setStyleSheet(STYLE_PRIMARY_BTN)
-        reinsert_btn.clicked.connect(self._reinsert_selected_job)
-        controls_row.addWidget(reinsert_btn)
-        controls_row.addStretch()
-        layout.addLayout(controls_row)
+        layout.addWidget(override_group)
+
+        # --- Action buttons ---
+        action_row = QHBoxLayout()
+
+        self._history_reinsert_btn = QPushButton("▶ Reinsert Selected Job")
+        self._history_reinsert_btn.setStyleSheet(STYLE_PRIMARY_BTN)
+        self._history_reinsert_btn.setToolTip("Reinsert all saved API outputs from this job into note fields.")
+        self._history_reinsert_btn.clicked.connect(self._reinsert_selected_job)
+        action_row.addWidget(self._history_reinsert_btn)
+
+        self._history_delete_btn = QPushButton("🗑 Delete Job")
+        self._history_delete_btn.setStyleSheet("background-color: #dc3545; color: white;")
+        self._history_delete_btn.setToolTip("Permanently delete this job and its stored assets.")
+        self._history_delete_btn.clicked.connect(self._delete_selected_job)
+        action_row.addWidget(self._history_delete_btn)
+
+        action_row.addStretch()
+        layout.addLayout(action_row)
 
         return tab
+
+    def _on_history_filter_changed(self, _text: str) -> None:
+        """Handle status filter change — reload jobs."""
+        self._refresh_history_jobs()
 
     def _refresh_history_jobs(self) -> None:
         """Reload history jobs into the history dropdown."""
         if not self._history_job_dropdown:
             return
 
-        jobs = self._history_manager.list_jobs(limit=300)
+        # Determine status filter
+        status_filter = None
+        if self._history_status_filter:
+            raw = self._history_status_filter.currentText()
+            if raw and raw != "All":
+                status_filter = raw
+
+        jobs = self._history_manager.list_jobs(limit=300, status_filter=status_filter)
 
         self._history_job_dropdown.blockSignals(True)
         self._history_job_dropdown.clear()
@@ -945,8 +1021,13 @@ class DeckOperationDialog(QDialog):
             self._history_job_dropdown.addItem("(No saved jobs)", "")
         else:
             for job in jobs:
+                status_icon = {
+                    "completed": "✅",
+                    "stopped": "⏹",
+                    "running": "🔄",
+                }.get(job.get("status", ""), "❓")
                 display = (
-                    f"[{job.get('started_at', '')}] "
+                    f"{status_icon} [{job.get('started_at', '')}] "
                     f"{job.get('operation', 'unknown')} | "
                     f"{job.get('deck_name', '')} | "
                     f"{job.get('success', 0)}/{job.get('total', 0)}"
@@ -956,54 +1037,131 @@ class DeckOperationDialog(QDialog):
         self._history_job_dropdown.blockSignals(False)
         self._on_history_job_changed()
 
-    def _on_history_job_changed(self) -> None:
-        """Show details for selected history job."""
+    def _on_history_job_changed(self, _index: int = -1) -> None:
+        """Show details for selected history job and populate override dropdowns."""
         if not self._history_job_dropdown or not self._history_detail_text:
             return
 
         job_id = self._history_job_dropdown.currentData()
         if not job_id:
             self._history_detail_text.setPlainText("No history job selected.")
+            self._set_history_buttons_enabled(False)
             return
 
         job = self._history_manager.get_job(str(job_id))
         if not job:
             self._history_detail_text.setPlainText("Selected job could not be loaded.")
+            self._set_history_buttons_enabled(False)
             return
+
+        self._set_history_buttons_enabled(True)
 
         summary = job.get("summary", {})
         items = job.get("items", [])
         settings = job.get("settings", {})
-        preview_items = items[:10] if isinstance(items, list) else []
+        total_items = len(items) if isinstance(items, list) else 0
+        preview_limit = 50
+        preview_items = items[:preview_limit] if isinstance(items, list) else []
+
+        status = job.get("status", "")
+        status_display = {
+            "completed": "✅ Completed",
+            "stopped": "⏹ Stopped (user cancelled)",
+            "running": "🔄 Running (or interrupted)",
+        }.get(status, f"❓ {status}")
 
         lines = [
-            f"Job ID: {job.get('job_id', '')}",
-            f"Operation: {job.get('operation', '')}",
-            f"Deck: {job.get('deck_name', '')}",
-            f"Started: {job.get('started_at', '')}",
-            f"Completed: {job.get('completed_at', '')}",
-            f"Status: {job.get('status', '')}",
+            f"{'='*60}",
+            f"  Job ID:     {job.get('job_id', '')}",
+            f"  Operation:  {job.get('operation', '')}",
+            f"  Deck:       {job.get('deck_name', '')}",
+            f"  Status:     {status_display}",
+            f"  Started:    {job.get('started_at', '')}",
+            f"  Completed:  {job.get('completed_at', '') or '(not finished)'}",
+            f"{'='*60}",
             "",
-            "Summary:",
-            f"  Total: {summary.get('total', 0)}",
-            f"  Success: {summary.get('success', 0)}",
-            f"  Failure: {summary.get('failure', 0)}",
+            "📊 Summary:",
+            f"  Total Items:   {summary.get('total', 0)}",
+            f"  ✅ Success:    {summary.get('success', 0)}",
+            f"  ❌ Failure:    {summary.get('failure', 0)}",
             "",
-            f"Settings: {settings}",
-            "",
-            "Recent items:",
         ]
 
-        for item in preview_items:
-            lines.append(
-                f"- note_id={item.get('note_id')} | field={item.get('target_field')} | "
-                f"status={item.get('insert_status')} | error={item.get('insert_error', '')}"
-            )
+        # Show settings in readable format
+        if settings:
+            lines.append("⚙️ Settings:")
+            for key, value in settings.items():
+                lines.append(f"  {key}: {value}")
+            lines.append("")
 
-        if isinstance(items, list) and len(items) > len(preview_items):
-            lines.append(f"... ({len(items) - len(preview_items)} more items)")
+        # Show item details
+        if preview_items:
+            lines.append(f"📋 Items (showing {len(preview_items)} of {total_items}):")
+            lines.append(f"{'-'*60}")
+            for i, item in enumerate(preview_items, 1):
+                note_id = item.get("note_id", "?")
+                source = item.get("source_text", "")[:30]
+                field = item.get("target_field", "")
+                status_str = item.get("insert_status", "?")
+                output_preview = item.get("api_output", "")[:50]
+                error = item.get("insert_error", "")
+
+                status_icon = "✅" if status_str == "success" else "❌"
+                line = f"  {i:3d}. {status_icon} [{source}] → {field}"
+                if output_preview:
+                    # Replace newlines for display
+                    output_preview = output_preview.replace("\n", " | ")
+                    line += f"  ▸ {output_preview}"
+                if error:
+                    line += f"  ⚠ {error}"
+                lines.append(line)
+
+            if total_items > preview_limit:
+                lines.append(f"")
+                lines.append(f"  ... and {total_items - preview_limit} more items (all will be reinserted)")
+        else:
+            lines.append("(No items recorded in this job)")
 
         self._history_detail_text.setPlainText("\n".join(lines))
+
+        # Populate field override dropdowns using current deck fields
+        self._populate_history_field_overrides(job)
+
+    def _set_history_buttons_enabled(self, enabled: bool) -> None:
+        """Enable or disable history action buttons."""
+        if self._history_reinsert_btn:
+            self._history_reinsert_btn.setEnabled(enabled)
+        if self._history_delete_btn:
+            self._history_delete_btn.setEnabled(enabled)
+
+    def _populate_history_field_overrides(self, job: Dict[str, Any]) -> None:
+        """Populate the target/secondary field override dropdowns."""
+        fields = self._current_fields or []
+        settings = job.get("settings", {})
+
+        for dropdown, original_key in [
+            (self._history_target_override, "target_field"),
+            (self._history_secondary_override, "translation_field"),
+        ]:
+            if not dropdown:
+                continue
+            dropdown.blockSignals(True)
+            dropdown.clear()
+            dropdown.addItem("(Use original)")
+            if fields:
+                dropdown.addItems(fields)
+                dropdown.setEnabled(True)
+            else:
+                dropdown.setEnabled(False)
+
+            # Try to pre-select the original field from settings
+            original_value = settings.get(original_key, "")
+            if original_value and original_value in fields:
+                idx = dropdown.findText(original_value)
+                if idx >= 0:
+                    dropdown.setCurrentIndex(idx)
+
+            dropdown.blockSignals(False)
 
     def _reinsert_selected_job(self) -> None:
         """Reinsert selected history job outputs into notes."""
@@ -1017,13 +1175,36 @@ class DeckOperationDialog(QDialog):
 
         overwrite = bool(self._history_overwrite_cb and self._history_overwrite_cb.isChecked())
 
-        if not askUser(
-            "Reinsert all saved outputs from this job?\n\n"
-            f"Overwrite existing content: {'Yes' if overwrite else 'No'}"
-        ):
+        # Read field overrides
+        target_override = ""
+        if self._history_target_override:
+            raw = self._history_target_override.currentText()
+            if raw and raw != "(Use original)":
+                target_override = raw
+
+        secondary_override = ""
+        if self._history_secondary_override:
+            raw = self._history_secondary_override.currentText()
+            if raw and raw != "(Use original)":
+                secondary_override = raw
+
+        # Build confirmation message
+        confirm_parts = ["Reinsert all saved outputs from this job?\n"]
+        if target_override:
+            confirm_parts.append(f"Target field override: {target_override}")
+        if secondary_override:
+            confirm_parts.append(f"Secondary field override: {secondary_override}")
+        confirm_parts.append(f"Overwrite existing content: {'Yes' if overwrite else 'No'}")
+
+        if not askUser("\n".join(confirm_parts)):
             return
 
-        result = self._history_manager.reinsert_job(str(job_id), overwrite=overwrite)
+        result = self._history_manager.reinsert_job(
+            str(job_id),
+            overwrite=overwrite,
+            target_field_override=target_override,
+            secondary_field_override=secondary_override,
+        )
         showInfo(
             "Reinsert complete.\n\n"
             f"✅ Success: {result.get('success', 0)}\n"
@@ -1032,6 +1213,26 @@ class DeckOperationDialog(QDialog):
             f"📊 Total: {result.get('total', 0)}"
         )
 
+        self._refresh_history_jobs()
+
+    def _delete_selected_job(self) -> None:
+        """Delete the selected history job and its assets."""
+        if not self._history_job_dropdown:
+            return
+
+        job_id = self._history_job_dropdown.currentData()
+        if not job_id:
+            showWarning("Please select a saved job first.")
+            return
+
+        if not askUser(
+            "Permanently delete this job and its stored assets?\n\n"
+            "This cannot be undone."
+        ):
+            return
+
+        self._history_manager.delete_job(str(job_id))
+        showInfo("Job deleted.")
         self._refresh_history_jobs()
     
     # ========== Deck Management ==========
@@ -1836,13 +2037,25 @@ class DeckOperationDialog(QDialog):
         self._append_history_items(history_items)
     
     def _stop_operation(self) -> None:
-        """Stop the current operation."""
+        """Stop the current operation and mark the active history job as stopped."""
         if self._cancel_event:
             self._cancel_event.set()
             self._pause_event.set()  # Also release pause if paused
             self._status_label.setText("Stopping...")
             self._pause_btn.setEnabled(False)
             self._global_stop_btn.setEnabled(False)
+
+            # Mark the active history job as stopped so the data is preserved
+            if self._active_job_id:
+                try:
+                    self._history_manager.stop_job(self._active_job_id)
+                    logger.info(f"Marked history job {self._active_job_id} as stopped")
+                except Exception as exc:
+                    logger.error(f"Failed to stop history job: {exc}")
+                finally:
+                    self._active_job_id = None
+                    self._active_job_operation = None
+                    self._refresh_history_jobs()
     
     def _toggle_pause(self) -> None:
         """Toggle pause/resume state."""
