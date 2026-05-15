@@ -93,6 +93,7 @@ class BatchTranslator(QRunnable):
         batch_delay_seconds: float = DEFAULT_BATCH_DELAY,
         ignore_errors: bool = True,
         cancel_event: Optional[threading.Event] = None,
+        pause_event: Optional[threading.Event] = None,
         addon_dir: Optional[str] = None,
     ) -> None:
         """
@@ -107,6 +108,7 @@ class BatchTranslator(QRunnable):
             batch_delay_seconds: Delay between batches (default: 8.0s for rate limit safety)
             ignore_errors: Continue on errors if True
             cancel_event: Event to signal cancellation
+            pause_event: Event to pause/resume processing
             addon_dir: Add-on directory path
         """
         super().__init__()
@@ -119,6 +121,7 @@ class BatchTranslator(QRunnable):
         self.batch_delay_seconds = max(1.0, batch_delay_seconds)
         self.ignore_errors = ignore_errors
         self.cancel_event = cancel_event or threading.Event()
+        self.pause_event = pause_event or threading.Event()
         
         self._addon_dir = addon_dir or _addon_dir
         self._logger = StellaLogger.get_logger(self._addon_dir, "batch_translator")
@@ -150,6 +153,7 @@ class BatchTranslator(QRunnable):
             
             # Process in batches
             for batch in self._chunk_notes():
+                self._wait_if_paused()
                 if self.cancel_event.is_set():
                     self._logger.warning("Batch translation cancelled")
                     break
@@ -579,5 +583,14 @@ Example for "instruct" with context "The teacher instructs the students":
         interval = 0.5
         elapsed = 0.0
         while elapsed < seconds and not self.cancel_event.is_set():
-            time.sleep(min(interval, seconds - elapsed))
-            elapsed += interval
+            self._wait_if_paused()
+            if self.cancel_event.is_set():
+                break
+            step = min(interval, seconds - elapsed)
+            time.sleep(step)
+            elapsed += step
+
+    def _wait_if_paused(self) -> None:
+        """Block while paused, but allow immediate cancellation."""
+        while self.pause_event.is_set() and not self.cancel_event.is_set():
+            time.sleep(0.1)
