@@ -1974,7 +1974,7 @@ class DeckOperationDialog(QDialog):
             f"Operation Complete!\n\n"
             f"\u2705 Successful: {success}\n"
             f"\u274c Failed: {failure}\n"
-            f"\ud83d\udcca Total: {total}"
+            f"\U0001F4CA Total: {total}"
         )
 
     def _start_history_job(self, operation_type: str, settings: Optional[Dict[str, Any]] = None) -> None:
