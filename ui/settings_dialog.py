@@ -455,12 +455,6 @@ class DeckOperationDialog(QDialog):
         self._translate_btn.clicked.connect(self._start_translation)
         button_row.addWidget(self._translate_btn)
         
-        self._stop_btn = QPushButton(TEXT_STOP)
-        self._stop_btn.setStyleSheet(STYLE_STOP_BTN)
-        self._stop_btn.setEnabled(False)
-        self._stop_btn.clicked.connect(self._stop_operation)
-        button_row.addWidget(self._stop_btn)
-        
         layout.addLayout(button_row)
         layout.addStretch()
         
@@ -669,12 +663,6 @@ class DeckOperationDialog(QDialog):
         self._sentence_btn.clicked.connect(self._start_sentence_generation)
         button_row.addWidget(self._sentence_btn)
         
-        self._stop_sentence_btn = QPushButton(TEXT_STOP)
-        self._stop_sentence_btn.setStyleSheet(STYLE_STOP_BTN)
-        self._stop_sentence_btn.setEnabled(False)
-        self._stop_sentence_btn.clicked.connect(self._stop_operation)
-        button_row.addWidget(self._stop_sentence_btn)
-        
         layout.addLayout(button_row)
         layout.addStretch()
         
@@ -787,12 +775,6 @@ class DeckOperationDialog(QDialog):
         self._image_btn.setStyleSheet(STYLE_PRIMARY_BTN)
         self._image_btn.clicked.connect(self._start_image_generation)
         button_row.addWidget(self._image_btn)
-        
-        self._stop_image_btn = QPushButton(TEXT_STOP)
-        self._stop_image_btn.setStyleSheet(STYLE_STOP_BTN)
-        self._stop_image_btn.setEnabled(False)
-        self._stop_image_btn.clicked.connect(self._stop_operation)
-        button_row.addWidget(self._stop_image_btn)
         
         layout.addLayout(button_row)
         layout.addStretch()
@@ -1497,86 +1479,6 @@ class DeckOperationDialog(QDialog):
         
         return random.sample(sample_pool, count)
     
-    def _run_preview(self, operation_type: str) -> None:
-        """
-        Run preview workflow for specified operation.
-        
-        Args:
-            operation_type: "translation", "sentence", or "image"
-        """
-        from .preview_dialog import PreviewDialog
-        from ..translation.translator import Translator
-        from ..sentence.sentence_generator import SentenceGenerator
-        from ..image.image_generator import ImageGenerator
-        from ..image.prompt_generator import PromptGenerator
-        
-        # Validate API key
-        if not self._validate_api_key():
-            return
-        
-        # Get sample notes
-        sample_notes = self._get_sample_notes(operation_type, count=3)
-        
-        if not sample_notes:
-            showWarning(
-                "No suitable cards found for preview.\n"
-                "Please make sure the deck has cards with content in the source field."
-            )
-            return
-        
-        # Show "generating" status
-        self._status_label.setText(f"Generating {len(sample_notes)} previews...")
-        self._progress_bar.setRange(0, len(sample_notes))
-        self._progress_bar.setValue(0)
-        
-        # Generate previews
-        results: List[PreviewResult] = []
-        
-        try:
-            for i, note in enumerate(sample_notes):
-                self._progress_bar.setValue(i)
-                self._status_label.setText(f"Generating preview {i+1}/{len(sample_notes)}...")
-                
-                # Process based on operation type
-                if operation_type == "translation":
-                    result = self._generate_translation_preview(note)
-                elif operation_type == "sentence":
-                    result = self._generate_sentence_preview(note)
-                elif operation_type == "image":
-                    result = self._generate_image_preview(note)
-                else:
-                    continue
-                
-                results.append(result)
-                
-                # Small delay between API calls to respect rate limits
-                if i < len(sample_notes) - 1:
-                    import time
-                    time.sleep(1.0)
-        
-        except Exception as e:
-            logger.error(f"Preview generation error: {e}")
-            showWarning(f"Preview generation failed:\n{str(e)}")
-            self._status_label.setText("Preview failed")
-            self._progress_bar.setValue(0)
-            return
-        
-        self._progress_bar.setValue(len(sample_notes))
-        self._status_label.setText("Preview ready")
-        
-        # Show preview dialog
-        dialog = PreviewDialog(self, results)
-        
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            # User approved - apply the previewed results
-            self._apply_preview_results(results, operation_type)
-            showInfo(f"Applied {len(results)} preview results.\nYou can now start the full batch.")
-        else:
-            # User cancelled - cleanup temp files
-            for result in results:
-                result.cleanup()
-            self._status_label.setText("Preview cancelled")
-    
     def _generate_translation_preview(self, note) -> PreviewResult:
         """Generate a translation preview for a single note."""
         from ..translation.translator import Translator
@@ -1613,6 +1515,7 @@ class DeckOperationDialog(QDialog):
         target_language = self._sentence_lang_dropdown.currentText()
         difficulty = self._difficulty_dropdown.currentText()
         highlight = self._highlight_cb.isChecked()
+        model_name = self._sentence_model_dropdown.currentText()
         
         return generator.generate_sentence_preview(
             note=note,
@@ -1620,18 +1523,19 @@ class DeckOperationDialog(QDialog):
             sentence_field=sentence_field,
             target_language=target_language,
             difficulty=difficulty,
-            highlight=highlight
+            highlight=highlight,
+            model_name=model_name,
         )
     
     def _generate_image_preview(self, note) -> PreviewResult:
         """Generate an image preview for a single note."""
         from ..image.image_generator import ImageGenerator
-        from ..image.prompt_generator import PromptGenerator
+        from ..image.prompt_generator import ImagePromptGenerator
         
         word_field = self._image_word_dropdown.currentText()
         image_field = self._image_field_dropdown.currentText()
         style = self._style_dropdown.currentText()
-        custom_prompts = self._config_manager.config.image.custom_prompts
+        custom_prompt = self._prompt_edit.toPlainText().strip() if self._prompt_edit else ""
         
         # Get word from note
         word = note[word_field].strip() if word_field in note else ""
@@ -1646,9 +1550,14 @@ class DeckOperationDialog(QDialog):
                 error="Word field is empty"
             )
         
-        # Generate prompt
-        prompt_generator = PromptGenerator(custom_prompts)
-        prompt = prompt_generator.generate_prompt(word, style)
+        # Generate prompt (with fallback)
+        prompt_generator = ImagePromptGenerator()
+        prompt_result = prompt_generator.generate_prompt(
+            word=word,
+            style=style,
+            custom_instructions=custom_prompt or None,
+        )
+        prompt = prompt_result.prompt if prompt_result and prompt_result.prompt else f"{word}, {style} style"
         
         # Generate image
         generator = ImageGenerator(self._key_manager)
@@ -1756,23 +1665,10 @@ class DeckOperationDialog(QDialog):
         """Start a batch operation with progress tracking."""
         from ..translation.batch_translator import BatchTranslator
         
-        # Reset state
-        self._cancel_event.clear()
-        self._success_count = 0
-        self._failure_count = 0
-        self._error_log.clear()
-        self._error_log.hide()
-        
-        # Update UI
+        # Reset state + update shared progress UI controls
         total = len(notes_data)
-        self._progress_bar.setMaximum(total)
-        self._progress_bar.setValue(0)
-        self._progress_label.setText(f"0 / {total}")
-        self._status_label.setText(f"Processing {operation_type}...")
-        
-        # Disable buttons
+        self._start_batch_ui(total, operation_type)
         self._translate_btn.setEnabled(False)
-        self._stop_btn.setEnabled(True)
 
         self._start_history_job(
             operation_type=operation_type,
@@ -1798,6 +1694,7 @@ class DeckOperationDialog(QDialog):
             batch_delay_seconds=float(self._delay_spin.value()),
             ignore_errors=True,
             cancel_event=self._cancel_event,
+            pause_event=self._pause_event,
         )
         
         # Connect signals
@@ -1835,6 +1732,9 @@ class DeckOperationDialog(QDialog):
     
     def _on_error(self, error: str) -> None:
         """Handle critical error."""
+        self._active_worker = None
+        self._translate_btn.setEnabled(True)
+        self._end_batch_ui()
         total = self._success_count + self._failure_count
         self._finish_active_history_job(
             success=self._success_count,
@@ -1846,10 +1746,12 @@ class DeckOperationDialog(QDialog):
     def _on_finished(self, success: int, failure: int) -> None:
         """Handle operation completion."""
         self._active_worker = None
+        operation_type = self._active_job_operation
         
         # Re-enable buttons
         self._translate_btn.setEnabled(True)
-        self._stop_btn.setEnabled(False)
+        if operation_type == "translation":
+            self._end_batch_ui()
         
         # Show results
         total = success + failure
@@ -2027,38 +1929,27 @@ class DeckOperationDialog(QDialog):
     def _run_preview(self, mode: str) -> None:
         """Run preview for the specified mode (sentence, translation, image)."""
         import random
-        import time
-        import os
-        from ..ui.preview_dialog import PreviewDialog
-        from .main_controller import StellaAnkiTools
-        from aqt.qt import QProgressDialog, Qt
+        from .preview_dialog import PreviewDialog
+        from aqt.qt import QProgressDialog, Qt, QApplication
         
         # 1. Validation & Setup
         if not self._validate_api_key():
             return
             
-        controller = StellaAnkiTools(self._mw)
         source_field = ""
-        param_dict = {}
+        target_field = ""
+        context_field = ""
+        sentence_translation_field = ""
         
         # Determine fields and params based on mode
         if mode == "sentence":
             source_field = self._sentence_word_dropdown.currentText()
             target_field = self._sentence_field_dropdown.currentText()
-            trans_field_name = self._sentence_trans_dropdown.currentText()
+            sentence_translation_field = self._sentence_trans_dropdown.currentText()
             
             if not source_field or not target_field:
                 showWarning("Please select Word and Sentence fields first.")
                 return
-                
-            param_dict = {
-                "sentence_field": target_field,
-                "translation_field": trans_field_name,
-                "target_language": self._sentence_lang_dropdown.currentText(),
-                "difficulty": self._difficulty_dropdown.currentText(),
-                "highlight": self._highlight_cb.isChecked(),
-                "model_name": self._sentence_model_dropdown.currentText()
-            }
         elif mode == "translation":
             source_field = self._source_dropdown.currentText()
             context_field = self._context_dropdown.currentText()
@@ -2067,14 +1958,6 @@ class DeckOperationDialog(QDialog):
             if not source_field or not target_field:
                 showWarning("Please select Source and Destination fields first.")
                 return
-                
-            param_dict = {
-                "source_field": source_field,
-                "context_field": context_field,
-                "destination_field": target_field,
-                "target_language": self._language_dropdown.currentText(),
-                "model_name": self._model_dropdown.currentText()
-            }
         elif mode == "image":
             source_field = self._image_word_dropdown.currentText()
             target_field = self._image_field_dropdown.currentText()
@@ -2082,13 +1965,6 @@ class DeckOperationDialog(QDialog):
             if not source_field or not target_field:
                 showWarning("Please select Word and Image fields first.")
                 return
-                
-            current_style = self._style_dropdown.currentText()
-            param_dict = {
-                "image_field": target_field,
-                "style": current_style,
-                "custom_prompt": self._prompt_edit.toPlainText()
-            }
         else:
             return
 
@@ -2105,13 +1981,15 @@ class DeckOperationDialog(QDialog):
              
         notes_data = self._collect_notes_from_deck(
             source_field=source_field,
+            context_field=context_field if context_field and context_field != TEXT_NONE_OPTION else None,
             skip_if_has_content_in=check_skip
         )
         
         # Fallback: if no empty cards found but we want to preview, try allowing filled cards
         if not notes_data and skip_if_filled:
-             notes_data = self._collect_notes_from_deck(
+            notes_data = self._collect_notes_from_deck(
                 source_field=source_field,
+                context_field=context_field if context_field and context_field != TEXT_NONE_OPTION else None,
                 skip_if_has_content_in=None
             )
         
@@ -2122,7 +2000,7 @@ class DeckOperationDialog(QDialog):
         # Sample 3 random notes
         sample_size = min(3, len(notes_data))
         sample_notes_data = random.sample(notes_data, sample_size)
-        sample_nids = [d['note_id'] for d in sample_notes_data]
+        sample_nids = [d["note_id"] for d in sample_notes_data]
         
         # 3. Generate Previews (Blocking with Progress Dialog)
         # Preview uses individual requests with delay for safety (not batch mode)
@@ -2141,7 +2019,11 @@ class DeckOperationDialog(QDialog):
             f"{key_info}",
             "Cancel", 0, sample_size, self
         )
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        window_modal = getattr(getattr(Qt, "WindowModality", Qt), "WindowModal", None)
+        if window_modal is None:
+            window_modal = getattr(Qt, "WindowModal", None)
+        if window_modal is not None:
+            progress.setWindowModality(window_modal)
         progress.setMinimumDuration(0)
         progress.setMinimumWidth(450)
         progress.setValue(0)
@@ -2166,13 +2048,8 @@ class DeckOperationDialog(QDialog):
                         f"(Batch mode is faster, this delay ensures stability)\n\n"
                         f"{key_info}"
                     )
-                    # Process events to keep UI responsive during delay
-                    from aqt.qt import QApplication
-                    for _ in range(int(PREVIEW_DELAY_SECONDS * 10)):
-                        if progress.wasCanceled():
-                            break
-                        time.sleep(0.1)
-                        QApplication.processEvents()
+                    if not self._interruptible_delay(PREVIEW_DELAY_SECONDS):
+                        break
                     if progress.wasCanceled():
                         break
                 
@@ -2189,63 +2066,34 @@ class DeckOperationDialog(QDialog):
                 )
                 
                 note = self._mw.col.get_note(nid)
-                
-                if mode == "sentence":
-                    res = controller.sentence_generator.generate_sentence_preview(
-                        note=note,
-                        expression_field=source_field,
-                        sentence_field=param_dict["sentence_field"],
-                        target_language=param_dict["target_language"],
-                        difficulty=param_dict["difficulty"],
-                        highlight=param_dict["highlight"],
-                        model_name=param_dict["model_name"]
-                    )
-                    # Manually add secondary field LABEL if successful
-                    if res.secondary_content and param_dict["translation_field"]:
-                         res.secondary_field = param_dict["translation_field"]
-                    results.append(res)
-                    
-                elif mode == "translation":
-                    res = controller.translator.translate_note_preview(
-                        note=note,
-                        source_field=param_dict["source_field"],
-                        context_field=param_dict.get("context_field"),
-                        destination_field=param_dict["destination_field"],
-                        target_language=param_dict["target_language"],
-                        model_name=param_dict["model_name"]
-                    )
-                    results.append(res)
-                    
-                elif mode == "image":
-                    # Generate prompt
-                    style = param_dict["style"]
-                    custom_prompt = param_dict["custom_prompt"]
-                    word = note[source_field]
-                    
-                    prompt_result = controller.prompt_generator.generate_prompt(
-                        word=word, 
-                        style=style, 
-                        custom_instructions=custom_prompt
-                    )
-                    
-                    if not prompt_result.success:
-                         final_prompt_str = f"{word}, {style} style" 
+                try:
+                    if mode == "sentence":
+                        res = self._generate_sentence_preview(note)
+                        if res.secondary_content and sentence_translation_field:
+                            res.secondary_field = sentence_translation_field
+                    elif mode == "translation":
+                        res = self._generate_translation_preview(note)
                     else:
-                         final_prompt_str = prompt_result.prompt
-                    
-                    res = controller.image_generator.generate_image_preview(
-                        note,
-                        prompt=final_prompt_str,
-                        image_field=param_dict["image_field"],
-                        word=word
+                        res = self._generate_image_preview(note)
+                except Exception as e:
+                    res = PreviewResult(
+                        note_id=note.id,
+                        original_text=self._extract_word_from_note(note, source_field),
+                        generated_content=f"Error: {e}",
+                        target_field=target_field,
+                        is_image=(mode == "image"),
+                        error=str(e),
                     )
-                    results.append(res)
+                results.append(res)
                 
                 progress.setValue(i + 1)
+                QApplication.processEvents()
                 
         except Exception as e:
             # Cleanup any already generated
-            for r in results: r.cleanup()
+            for r in results:
+                r.cleanup()
+            logger.error(f"Preview generation failed: {e}", exc_info=True)
             showWarning(f"Preview generation failed: {e}")
             return
         finally:
@@ -2266,62 +2114,6 @@ class DeckOperationDialog(QDialog):
         else:
             pass
 
-    def _apply_preview_results(self, results: List[PreviewResult], mode: str) -> None:
-        """Apply the accepted preview results to the actual notes."""
-        import os
-        import time
-        import shutil
-        from ..core.utils import clean_filename
-        
-        applied_count = 0
-        self._mw.checkpoint("Stella Preview Apply")
-        self._mw.progress.start()
-        
-        try:
-            for res in results:
-                if res.error:
-                    continue
-                    
-                note = self._mw.col.get_note(res.note_id)
-                
-                if res.is_image:
-                     # Move temp file to media
-                     if res.temp_image_path and os.path.exists(res.temp_image_path):
-                        # Simple filename generation
-                        safe_word = "".join(x for x in res.original_text if x.isalnum())[:15]
-                        filename = f"stella_img_{safe_word}_{int(time.time()*1000)}.png"
-                        
-                        # Copy to media folder
-                        media_path = os.path.join(self._mw.col.media.dir(), filename)
-                        shutil.copy(res.temp_image_path, media_path)
-                        
-                        # Write to note
-                        note[res.target_field] = f'<img src="{filename}">'
-                     
-                else:
-                    # Text content
-                    note[res.target_field] = str(res.generated_content)
-                    
-                    # Secondary (e.g. translation for sentence)
-                    if res.secondary_content and res.secondary_field:
-                         note[res.secondary_field] = res.secondary_content
-
-                self._mw.col.update_note(note)
-                applied_count += 1
-                
-                # Cleanup temp files
-                res.cleanup()
-            
-            # Show toast or status
-            from aqt.utils import tooltip
-            tooltip(f"Applied {applied_count} preview results.")
-            
-        except Exception as e:
-            showWarning(f"Error applying preview results: {e}")
-        finally:
-            self._mw.progress.finish()
-            self._mw.reset()
-    
     # ========== Sentence Generation ==========
     
     def _start_sentence_generation(self) -> None:
@@ -2383,7 +2175,6 @@ class DeckOperationDialog(QDialog):
         # Initialize UI and progress
         self._start_batch_ui(total, "sentence generation")
         self._sentence_btn.setEnabled(False)
-        self._stop_sentence_btn.setEnabled(True)
         self._init_sentence_progress(notes_data)
         self._start_history_job(
             operation_type="sentence",
@@ -2452,7 +2243,8 @@ class DeckOperationDialog(QDialog):
             else:
                 failure += 1
             
-            time.sleep(batch_delay)  # Rate limiting with configurable delay
+            if batch_delay > 0 and not self._interruptible_delay(batch_delay):
+                break
         
         return success, failure
     
@@ -2543,7 +2335,6 @@ class DeckOperationDialog(QDialog):
     def _cleanup_sentence_batch(self) -> None:
         """Cleanup after sentence batch."""
         self._sentence_btn.setEnabled(True)
-        self._stop_sentence_btn.setEnabled(False)
         self._end_batch_ui()
         
         if not self._cancel_event.is_set() and self._current_deck_id is not None:
@@ -2644,7 +2435,6 @@ class DeckOperationDialog(QDialog):
         # Initialize UI and progress
         self._start_batch_ui(total, "image generation")
         self._image_btn.setEnabled(False)
-        self._stop_image_btn.setEnabled(True)
         self._init_image_progress(notes_data)
         self._start_history_job(
             operation_type="image",
@@ -2706,7 +2496,8 @@ class DeckOperationDialog(QDialog):
             else:
                 failure += 1
             
-            time.sleep(3.0)  # Rate limiting
+            if not self._interruptible_delay(3.0):
+                break
         
         return success, failure
     
@@ -2722,6 +2513,21 @@ class DeckOperationDialog(QDialog):
             time.sleep(0.1)
         
         return not self._cancel_event.is_set()
+
+    def _interruptible_delay(self, seconds: float) -> bool:
+        """Delay helper that remains responsive to pause/cancel events."""
+        from aqt.qt import QApplication
+
+        elapsed = 0.0
+        interval = 0.1
+        while elapsed < seconds:
+            if not self._check_batch_continue():
+                return False
+            step = min(interval, seconds - elapsed)
+            time.sleep(step)
+            elapsed += step
+            QApplication.processEvents()
+        return True
     
     def _update_image_progress(self, i: int, total: int, word: str) -> None:
         """Update progress UI for image generation."""
@@ -2829,7 +2635,6 @@ class DeckOperationDialog(QDialog):
     def _cleanup_image_batch(self) -> None:
         """Cleanup after image batch."""
         self._image_btn.setEnabled(True)
-        self._stop_image_btn.setEnabled(False)
         self._end_batch_ui()
         
         if not self._cancel_event.is_set() and self._current_deck_id is not None:
