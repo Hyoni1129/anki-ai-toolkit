@@ -54,13 +54,6 @@ Then restart Anki. The add-on will appear in the menubar.
 
 ## Usage
 
-### Single card (in the editor)
-
-Open any note and use the toolbar buttons or shortcuts:
-- `Ctrl+Shift+T` — Translate
-- `Ctrl+Shift+S` — Generate sentence
-- `Ctrl+Shift+I` — Generate image
-
 ### Batch processing (in the browser)
 
 Select multiple cards → `Stella` menu → choose an operation. There's a progress dialog with pause/cancel support. Batch jobs can resume if interrupted.
@@ -118,7 +111,6 @@ Free to share and adapt for non-commercial purposes with attribution.
 
 - [Google Gemini](https://ai.google.dev/) for the AI backbone
 - [Anki](https://apps.ankiweb.net/) for being such a great platform to build on
-- The original projects this is based on: Stella Anki Translator, Anki Image Gen, BunAI Sentence Generator
 
 <div align="center">
 
