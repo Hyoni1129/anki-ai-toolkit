@@ -1944,25 +1944,37 @@ class DeckOperationDialog(QDialog):
         showWarning(f"Operation error:\n{error}")
     
     def _on_finished(self, success: int, failure: int) -> None:
-        """Handle operation completion."""
+        """Handle operation completion (from BatchTranslator worker).
+
+        This is also called after a user-initiated stop.  In that case
+        ``_active_job_id`` has already been cleared by ``_stop_operation``
+        and the UI was already cleaned up, so we avoid duplicating work.
+        """
         self._active_worker = None
         operation_type = self._active_job_operation
-        
-        # Re-enable buttons
+        was_cancelled = self._cancel_event.is_set()
+
+        # Always re-enable buttons and restore batch UI
         self._translate_btn.setEnabled(True)
-        if operation_type == "translation":
-            self._end_batch_ui()
-        
-        # Show results
+        self._end_batch_ui()
+
+        if was_cancelled:
+            # User already clicked Stop All — job was already saved as
+            # 'stopped'.  Just refresh the history list so the UI is
+            # up-to-date and don't show a completion popup.
+            self._refresh_history_jobs()
+            return
+
+        # Normal completion path
         total = success + failure
         self._status_label.setText(f"Completed: {success} success, {failure} failed")
         self._finish_active_history_job(success=success, failure=failure, total=total)
-        
+
         showInfo(
             f"Operation Complete!\n\n"
-            f"✅ Successful: {success}\n"
-            f"❌ Failed: {failure}\n"
-            f"📊 Total: {total}"
+            f"\u2705 Successful: {success}\n"
+            f"\u274c Failed: {failure}\n"
+            f"\ud83d\udcca Total: {total}"
         )
 
     def _start_history_job(self, operation_type: str, settings: Optional[Dict[str, Any]] = None) -> None:
@@ -2039,7 +2051,8 @@ class DeckOperationDialog(QDialog):
         """Stop the current operation and mark the active history job as stopped."""
         if self._cancel_event:
             self._cancel_event.set()
-            self._pause_event.set()  # Also release pause if paused
+            # Release the pause so the worker can exit its loop quickly
+            self._pause_event.clear()
             self._status_label.setText("Stopping...")
             self._pause_btn.setEnabled(False)
             self._global_stop_btn.setEnabled(False)
@@ -2054,7 +2067,9 @@ class DeckOperationDialog(QDialog):
                 finally:
                     self._active_job_id = None
                     self._active_job_operation = None
-                    self._refresh_history_jobs()
+
+            # Refresh history UI immediately so user can see the stopped job
+            self._refresh_history_jobs()
     
     def _toggle_pause(self) -> None:
         """Toggle pause/resume state."""
