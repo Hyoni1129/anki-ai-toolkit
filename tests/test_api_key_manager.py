@@ -22,6 +22,10 @@ from core.api_key_manager import (
 )
 
 
+VALID_TEST_KEY_1 = "AIza" + ("A" * 30) + "1"
+VALID_TEST_KEY_2 = "AIza" + ("B" * 30) + "2"
+
+
 class TestEncryption(unittest.TestCase):
     """Test encryption functions."""
     
@@ -134,12 +138,12 @@ class TestAPIKeyManager(unittest.TestCase):
         manager = APIKeyManager(self.temp_dir)
         
         # Add valid key
-        success, _ = manager.add_key("AIza_DUMMY_KEY_FOR_TESTING_1")
+        success, _ = manager.add_key(VALID_TEST_KEY_1)
         self.assertTrue(success)
         self.assertEqual(len(manager.get_all_keys()), 1)
         
         # Duplicate key should fail
-        success, _ = manager.add_key("AIza_DUMMY_KEY_FOR_TESTING_1")
+        success, _ = manager.add_key(VALID_TEST_KEY_1)
         self.assertFalse(success)
     
     def test_key_validation(self):
@@ -155,15 +159,15 @@ class TestAPIKeyManager(unittest.TestCase):
         self.assertFalse(success)
         
         # Valid
-        success, _ = manager.add_key("AIza_DUMMY_KEY_FOR_TESTING_1")
+        success, _ = manager.add_key(VALID_TEST_KEY_1)
         self.assertTrue(success)
     
     def test_remove_key(self):
         """Test removing API keys."""
         manager = APIKeyManager(self.temp_dir)
         
-        manager.add_key("AIza_DUMMY_KEY_FOR_TESTING_1")
-        manager.add_key("AIza_DUMMY_KEY_FOR_TESTING_2")
+        manager.add_key(VALID_TEST_KEY_1)
+        manager.add_key(VALID_TEST_KEY_2)
         
         self.assertEqual(len(manager.get_all_keys()), 2)
         
@@ -177,13 +181,13 @@ class TestAPIKeyManager(unittest.TestCase):
         
         self.assertIsNone(manager.get_current_key())
         
-        manager.add_key("AIza_DUMMY_KEY_FOR_TESTING_1")
+        manager.add_key(VALID_TEST_KEY_1)
         self.assertIsNotNone(manager.get_current_key())
     
     def test_record_success(self):
         """Test recording successful requests."""
         manager = APIKeyManager(self.temp_dir)
-        manager.add_key("AIza_DUMMY_KEY_FOR_TESTING_1")
+        manager.add_key(VALID_TEST_KEY_1)
         
         manager.record_success("translation", count=10)
         
@@ -195,8 +199,8 @@ class TestAPIKeyManager(unittest.TestCase):
     def test_record_failure_triggers_rotation(self):
         """Test that consecutive failures trigger key rotation."""
         manager = APIKeyManager(self.temp_dir)
-        manager.add_key("AIza_DUMMY_KEY_FOR_TESTING_1")
-        manager.add_key("AIza_DUMMY_KEY_FOR_TESTING_2")
+        manager.add_key(VALID_TEST_KEY_1)
+        manager.add_key(VALID_TEST_KEY_2)
         
         # Record failures up to threshold
         for _ in range(FAILURE_THRESHOLD):
@@ -204,12 +208,40 @@ class TestAPIKeyManager(unittest.TestCase):
         
         # Should have rotated
         self.assertTrue(rotated)
+
+    def test_reset_usage_and_rotation_restarts_from_first_key(self):
+        """Reset should clear usage/cooldowns and make rotation start at key 1."""
+        manager = APIKeyManager(self.temp_dir)
+        manager.add_key(VALID_TEST_KEY_1)
+        manager.add_key(VALID_TEST_KEY_2)
+
+        rotated, _ = manager.record_failure("429 quota exhausted")
+        self.assertTrue(rotated)
+        self.assertEqual(manager.get_current_key_index(), 1)
+
+        manager.record_failure("429 quota exhausted")
+        before_reset = manager.get_summary_stats()
+        self.assertEqual(before_reset["exhausted_keys"], 2)
+        self.assertGreater(before_reset["total_requests"], 0)
+
+        manager.reset_usage_and_rotation()
+
+        self.assertEqual(manager.get_current_key_index(), 0)
+        self.assertEqual(manager.get_current_key(), VALID_TEST_KEY_1)
+        stats = manager.get_summary_stats()
+        self.assertEqual(stats["active_keys"], 2)
+        self.assertEqual(stats["exhausted_keys"], 0)
+        self.assertEqual(stats["total_requests"], 0)
+        self.assertEqual(stats["total_rotations"], 0)
+        for key_stats in manager.get_all_stats().values():
+            self.assertEqual(key_stats["consecutive_failures"], 0)
+            self.assertIsNone(key_stats["exhausted_at"])
     
     def test_persistence(self):
         """Test that state persists across instances."""
         # Create and add key
         manager1 = APIKeyManager(self.temp_dir)
-        manager1.add_key("AIza_DUMMY_KEY_FOR_TESTING_1")
+        manager1.add_key(VALID_TEST_KEY_1)
         
         # Reset singleton
         APIKeyManager._instance = None

@@ -185,6 +185,8 @@ class BatchTranslator(QRunnable):
                 except Exception as batch_error:
                     failure_count += len(batch)
                     error_type = self._classify_error(batch_error)
+                    batch_results = self._build_failed_batch_results(batch, batch_error)
+                    self.signals.batch_results.emit(batch_results)
                     
                     self.signals.error_detail.emit(
                         error_type,
@@ -510,6 +512,35 @@ Example for "instruct" with context "The teacher instructs the students":
                 item_results.append(result_item)
         
         return success, failed, item_results
+
+    def _build_failed_batch_results(
+        self,
+        batch: List[Dict[str, Any]],
+        error: Exception,
+    ) -> List[Dict[str, Any]]:
+        """Create history-ready failure entries when the whole API batch fails."""
+        error_message = str(error)[:500] or type(error).__name__
+        item_results: List[Dict[str, Any]] = []
+
+        for item in batch:
+            raw_note_id = item.get("note_id")
+            try:
+                note_id = int(raw_note_id)
+            except Exception:
+                note_id = 0
+
+            item_results.append(
+                {
+                    "note_id": note_id,
+                    "word": str(item.get("word", "")).strip(),
+                    "target_field": self.destination_field,
+                    "translation": "",
+                    "insert_status": "failed",
+                    "insert_error": error_message,
+                }
+            )
+
+        return item_results
 
     def _run_on_main_thread(self, callback, timeout_seconds: float = 15.0):
         """Run callback on main thread and return its result."""

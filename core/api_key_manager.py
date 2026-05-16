@@ -718,6 +718,25 @@ class APIKeyManager:
         self._save_stats()
         self._save_state()
         self._notify_listeners("stats_reset", {})
+
+    def reset_usage_and_rotation(self) -> None:
+        """Reset usage statistics, cooldowns, and restart rotation from the first key."""
+        self.state.current_key_index = 0
+        self.state.stats = {}
+        self.state.total_rotations = 0
+        self.state.last_rotation = None
+        self._current_session_failures = 0
+
+        # Recreate clean stats entries so every key is immediately usable again.
+        for key in self.state.keys:
+            self._ensure_stats_for_key(key)
+
+        self._save_stats()
+        self._save_state()
+        self._notify_listeners("usage_rotation_reset", {
+            "total_keys": len(self.state.keys),
+            "current_key_index": self.state.current_key_index,
+        })
     
     def reset_key_cooldown(self, index: int) -> bool:
         """Manually reset cooldown for a specific key."""

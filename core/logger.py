@@ -84,9 +84,11 @@ class StellaLogger:
         file_handler = logging.FileHandler(log_file, encoding="utf-8")
         file_handler.setLevel(logging.DEBUG)
         
-        # Console handler - INFO and above
+        # Console handler - ERROR and above only.
+        # Anki monitors stderr and shows any output as an error dialog,
+        # so we must restrict console output to genuine errors.
         console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.INFO)
+        console_handler.setLevel(logging.ERROR)
         
         # Formatter with module name
         formatter = logging.Formatter(
