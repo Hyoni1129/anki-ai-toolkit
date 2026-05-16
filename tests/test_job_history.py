@@ -536,6 +536,29 @@ class TestBatchErrorHistoryItems(unittest.TestCase):
         self.assertEqual(job["items"][0]["insert_status"], "failed")
         self.assertIn("429 quota exceeded", job["items"][0]["insert_error"])
 
+    def test_all_keys_rate_limit_detection_requires_three_failures_per_key(self):
+        BatchTranslator = self._load_batch_translator()
+        worker = BatchTranslator(
+            notes_data=[],
+            target_language="Korean",
+            destination_field="korean",
+            addon_dir=self.temp_dir,
+        )
+        key_1 = "AIza" + ("C" * 30) + "1"
+        key_2 = "AIza" + ("D" * 30) + "2"
+        worker._key_manager.add_key(key_1)
+        worker._key_manager.add_key(key_2)
+        key_id_1, key_id_2 = worker._key_manager.get_masked_keys()
+
+        worker._rate_limit_failures_by_key = {
+            key_id_1: 3,
+            key_id_2: 2,
+        }
+        self.assertFalse(worker._should_prompt_all_keys_rate_limited())
+
+        worker._rate_limit_failures_by_key[key_id_2] = 3
+        self.assertTrue(worker._should_prompt_all_keys_rate_limited())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1917,6 +1917,7 @@ class DeckOperationDialog(QDialog):
         worker.signals.finished.connect(self._on_finished)
         worker.signals.error.connect(self._on_error)
         worker.signals.batch_results.connect(self._on_translation_batch_results)
+        worker.signals.all_keys_rate_limited.connect(self._on_all_keys_rate_limited)
         
         self._active_worker = worker
         self._thread_pool.start(worker)
@@ -1942,6 +1943,17 @@ class DeckOperationDialog(QDialog):
         """Log error details."""
         self._error_log.show()
         self._error_log.append(f"[{error_type}] {message} (x{count})")
+
+    def _on_all_keys_rate_limited(self, message: str, decision: Dict[str, Any]) -> None:
+        """Ask whether to continue after every configured key appears rate limited."""
+        continue_anyway = askUser(message)
+        decision["continue"] = bool(continue_anyway)
+        event = decision.get("event")
+        if event is not None:
+            event.set()
+        if not continue_anyway:
+            self._cancel_event.set()
+            self._status_label.setText("Stopped: all API keys appear to be rate limited")
     
     def _on_error(self, error: str) -> None:
         """Handle critical error."""

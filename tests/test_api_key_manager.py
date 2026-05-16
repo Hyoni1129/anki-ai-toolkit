@@ -11,6 +11,7 @@ import tempfile
 import shutil
 import json
 import sys
+from datetime import datetime, timedelta
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -236,7 +237,48 @@ class TestAPIKeyManager(unittest.TestCase):
         for key_stats in manager.get_all_stats().values():
             self.assertEqual(key_stats["consecutive_failures"], 0)
             self.assertIsNone(key_stats["exhausted_at"])
-    
+
+    def test_auto_reset_after_12_hours_inactive(self):
+        """Current key lookup should reset usage after 12 hours without API activity."""
+        manager = APIKeyManager(self.temp_dir)
+        manager.add_key(VALID_TEST_KEY_1)
+        manager.add_key(VALID_TEST_KEY_2)
+        manager.force_set_current_key(1)
+        manager.record_success("translation", count=1)
+
+        key_id = manager._get_key_id(VALID_TEST_KEY_2)
+        manager.state.stats[key_id]["last_used"] = (
+            datetime.now() - timedelta(hours=13)
+        ).isoformat()
+        manager.state.stats[key_id]["total_requests"] = 9
+        manager.state.stats[key_id]["successful_requests"] = 9
+        manager.state.stats[key_id]["exhausted_at"] = datetime.now().isoformat()
+        manager._save_stats()
+
+        self.assertTrue(manager.maybe_auto_reset_after_inactivity())
+        self.assertEqual(manager.get_current_key_index(), 0)
+        stats = manager.get_summary_stats()
+        self.assertEqual(stats["total_requests"], 0)
+        self.assertEqual(stats["exhausted_keys"], 0)
+
+    def test_last_key_three_failures_resets_rotation_to_first_key(self):
+        """Three failures on the final key should restart rotation from key 1."""
+        manager = APIKeyManager(self.temp_dir)
+        manager.add_key(VALID_TEST_KEY_1)
+        manager.add_key(VALID_TEST_KEY_2)
+        manager.force_set_current_key(1)
+
+        for _ in range(2):
+            rotated, _ = manager.record_failure("temporary failure", key=VALID_TEST_KEY_2)
+            self.assertFalse(rotated)
+
+        rotated, new_key = manager.record_failure("temporary failure", key=VALID_TEST_KEY_2)
+
+        self.assertTrue(rotated)
+        self.assertEqual(new_key, manager._get_key_id(VALID_TEST_KEY_1))
+        self.assertEqual(manager.get_current_key_index(), 0)
+        self.assertEqual(manager.get_current_key(), VALID_TEST_KEY_1)
+
     def test_persistence(self):
         """Test that state persists across instances."""
         # Create and add key

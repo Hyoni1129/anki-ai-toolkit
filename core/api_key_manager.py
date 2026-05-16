@@ -33,6 +33,8 @@ _logger = get_logger(__name__)
 MAX_API_KEYS = 15
 FAILURE_THRESHOLD = 5
 KEY_COOLDOWN_HOURS = 24
+AUTO_RESET_INACTIVE_HOURS = 12
+LAST_KEY_FAILURE_RESET_THRESHOLD = 3
 API_KEY_MIN_LENGTH = 35
 API_KEY_MAX_LENGTH = 50
 
@@ -435,6 +437,37 @@ class APIKeyManager:
         self._notify_listeners("keys_cleared", {})
     
     # ========== Key Rotation ==========
+
+    def _get_latest_activity_time(self) -> Optional[datetime]:
+        """Return the most recent API activity timestamp across all keys."""
+        latest: Optional[datetime] = None
+        for stats in self.state.stats.values():
+            for field_name in ("last_used", "last_failure"):
+                timestamp = stats.get(field_name)
+                if not timestamp:
+                    continue
+                try:
+                    parsed = datetime.fromisoformat(timestamp)
+                except (ValueError, TypeError):
+                    continue
+                if latest is None or parsed > latest:
+                    latest = parsed
+        return latest
+
+    def maybe_auto_reset_after_inactivity(self) -> bool:
+        """Reset usage/rotation if no API key has been used for the inactivity window."""
+        if not self.state.keys:
+            return False
+
+        latest_activity = self._get_latest_activity_time()
+        if latest_activity is None:
+            return False
+
+        if datetime.now() - latest_activity < timedelta(hours=AUTO_RESET_INACTIVE_HOURS):
+            return False
+
+        self.reset_usage_and_rotation(reason="auto_inactivity")
+        return True
     
     def get_current_key(self) -> Optional[str]:
         """
@@ -445,6 +478,8 @@ class APIKeyManager:
         Returns:
             Current API key or None if no keys available
         """
+        self.maybe_auto_reset_after_inactivity()
+
         if not self.state.keys:
             return None
         
@@ -596,22 +631,34 @@ class APIKeyManager:
             "count": count,
         })
     
-    def record_failure(self, reason: str = "unknown") -> Tuple[bool, Optional[str]]:
+    def record_failure(
+        self,
+        reason: str = "unknown",
+        key: Optional[str] = None,
+    ) -> Tuple[bool, Optional[str]]:
         """
         Record a failed API call.
         
         Args:
             reason: Reason for the failure
+            key: API key that actually made the failed request. If omitted,
+                the current key is used.
             
         Returns:
             Tuple of (key_rotated, new_key_id or None)
         """
-        key = self.get_current_key()
-        if not key:
+        self.maybe_auto_reset_after_inactivity()
+
+        failed_key = key or self.get_current_key()
+        if not failed_key:
             return False, None
         
-        key_id = self._get_key_id(key)
-        self._ensure_stats_for_key(key)
+        key_id = self._get_key_id(failed_key)
+        self._ensure_stats_for_key(failed_key)
+        try:
+            failed_key_index = self.state.keys.index(failed_key)
+        except ValueError:
+            failed_key_index = self.state.current_key_index
         
         stats = self.state.stats[key_id]
         stats["total_requests"] = stats.get("total_requests", 0) + 1
@@ -640,6 +687,12 @@ class APIKeyManager:
         elif consecutive >= FAILURE_THRESHOLD:
             # Too many consecutive failures, rotate
             should_rotate = True
+
+        should_reset_rotation = (
+            len(self.state.keys) > 1
+            and failed_key_index == len(self.state.keys) - 1
+            and consecutive >= LAST_KEY_FAILURE_RESET_THRESHOLD
+        )
         
         self._save_stats()
         
@@ -649,6 +702,10 @@ class APIKeyManager:
             "consecutive_failures": consecutive,
             "is_quota_error": is_quota_error,
         })
+
+        if should_reset_rotation:
+            self.reset_usage_and_rotation(reason="last_key_failed_retries")
+            return True, self.get_current_key_id()
         
         if should_rotate and len(self.state.keys) > 1:
             rotation_reason = "quota_exhausted" if is_quota_error else "consecutive_failures"
@@ -719,7 +776,7 @@ class APIKeyManager:
         self._save_state()
         self._notify_listeners("stats_reset", {})
 
-    def reset_usage_and_rotation(self) -> None:
+    def reset_usage_and_rotation(self, reason: str = "manual") -> None:
         """Reset usage statistics, cooldowns, and restart rotation from the first key."""
         self.state.current_key_index = 0
         self.state.stats = {}
@@ -736,6 +793,7 @@ class APIKeyManager:
         self._notify_listeners("usage_rotation_reset", {
             "total_keys": len(self.state.keys),
             "current_key_index": self.state.current_key_index,
+            "reason": reason,
         })
     
     def reset_key_cooldown(self, index: int) -> bool:

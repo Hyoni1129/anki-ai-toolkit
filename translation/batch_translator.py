@@ -61,6 +61,7 @@ class BatchTranslationSignals(QObject):
     finished = pyqtSignal(int, int)  # success_count, failure_count
     key_rotated = pyqtSignal(str, str)  # old_key_id, new_key_id
     batch_results = pyqtSignal(list)  # list of per-item translation results
+    all_keys_rate_limited = pyqtSignal(str, object)  # message, decision dict
 
 
 class BatchTranslator(QRunnable):
@@ -82,6 +83,7 @@ class BatchTranslator(QRunnable):
     # Default constants (documented for reference)
     DEFAULT_BATCH_SIZE = 5  # Reference uses 10, we use 5 for stability
     DEFAULT_BATCH_DELAY = 8.0  # Reference uses 5.0, we use 8.0 for rate limit safety
+    RATE_LIMIT_RETRIES_PER_KEY = 3
     
     def __init__(
         self,
@@ -132,6 +134,8 @@ class BatchTranslator(QRunnable):
         self._model = None
         self._current_api_key: Optional[str] = None
         self._consecutive_rate_errors = 0
+        self._rate_limit_failures_by_key: Dict[str, int] = {}
+        self._rate_limit_warning_acknowledged = False
     
     def run(self) -> None:
         """Execute batch translation."""
@@ -599,15 +603,70 @@ Example for "instruct" with context "The teacher instructs the students":
     def _handle_batch_error(self, error: Exception, error_type: str) -> bool:
         """Handle batch error and potentially rotate key."""
         if error_type in ("RATE_LIMIT", "QUOTA_EXCEEDED"):
-            rotated, new_key = self._key_manager.record_failure(str(error))
+            failed_key = self._current_api_key or self._key_manager.get_current_key() or ""
+            failed_key_id = self._key_manager._get_key_id(failed_key)
+            self._rate_limit_failures_by_key[failed_key_id] = (
+                self._rate_limit_failures_by_key.get(failed_key_id, 0) + 1
+            )
+
+            rotated, new_key = self._key_manager.record_failure(str(error), key=failed_key)
+            if self._should_prompt_all_keys_rate_limited():
+                self._request_all_keys_rate_limit_decision()
+                if self.cancel_event.is_set():
+                    return False
+
             if rotated and new_key:
-                old_key = self._key_manager._get_key_id(self._current_api_key or "")
-                self.signals.key_rotated.emit(old_key, new_key)
+                self.signals.key_rotated.emit(failed_key_id, new_key)
                 self._consecutive_rate_errors = 0
                 return True
-        
-        self._key_manager.record_failure(str(error))
+
+            self._consecutive_rate_errors += 1
+            return False
+
+        self._key_manager.record_failure(str(error), key=self._current_api_key)
         return False
+
+    def _should_prompt_all_keys_rate_limited(self) -> bool:
+        """Return True once every configured key has hit repeated rate-limit failures."""
+        if self._rate_limit_warning_acknowledged:
+            return False
+
+        key_ids = self._key_manager.get_masked_keys()
+        if not key_ids:
+            return False
+
+        return all(
+            self._rate_limit_failures_by_key.get(key_id, 0) >= self.RATE_LIMIT_RETRIES_PER_KEY
+            for key_id in key_ids
+        )
+
+    def _request_all_keys_rate_limit_decision(self) -> None:
+        """Ask the UI whether to continue after every key appears rate limited."""
+        message = (
+            "All configured API keys appear to be rate limited.\n\n"
+            "Stella has rotated through every key and retried each key at least "
+            f"{self.RATE_LIMIT_RETRIES_PER_KEY} times, but Gemini is still returning "
+            "rate-limit errors.\n\n"
+            "Please check your Google API key usage/quota and try again later. "
+            "The recommended action is to stop now and retry tomorrow or after "
+            "your quota has refreshed.\n\n"
+            "Do you want to continue anyway?"
+        )
+        decision = {"event": threading.Event(), "continue": False}
+        self.signals.all_keys_rate_limited.emit(message, decision)
+
+        deadline = time.time() + 300
+        while not decision["event"].wait(0.1):
+            if self.cancel_event.is_set():
+                return
+            if time.time() >= deadline:
+                self._logger.warning("Timed out waiting for all-keys rate-limit decision")
+                self.cancel_event.set()
+                return
+
+        self._rate_limit_warning_acknowledged = True
+        if not decision.get("continue", False):
+            self.cancel_event.set()
     
     def _interruptible_sleep(self, seconds: float) -> None:
         """Sleep that can be interrupted by cancel event."""

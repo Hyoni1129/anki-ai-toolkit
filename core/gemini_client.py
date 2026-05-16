@@ -119,6 +119,9 @@ class GeminiClient:
     
     def _get_api_key(self) -> str:
         """Get the current API key from manager or stored key."""
+        if self._key_manager.maybe_auto_reset_after_inactivity():
+            self._api_key = None
+
         if self._api_key:
             return self._api_key
         
