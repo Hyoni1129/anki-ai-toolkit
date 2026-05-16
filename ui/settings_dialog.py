@@ -869,6 +869,13 @@ class DeckOperationDialog(QDialog):
         test_btn = QPushButton("Test Connection")
         test_btn.clicked.connect(self._test_api_connection)
         api_btn_row.addWidget(test_btn)
+
+        reset_usage_btn = QPushButton("Reset Usage / Rotation")
+        reset_usage_btn.setToolTip(
+            "Clear API usage statistics and cooldowns, then start again from the first key."
+        )
+        reset_usage_btn.clicked.connect(self._reset_api_usage_rotation)
+        api_btn_row.addWidget(reset_usage_btn)
         
         api_btn_row.addStretch()
         api_layout.addLayout(api_btn_row)
@@ -1001,13 +1008,13 @@ class DeckOperationDialog(QDialog):
 
     def _refresh_history_jobs(self) -> None:
         """Reload history jobs into the history dropdown."""
-        if not self._history_job_dropdown:
+        if self._history_job_dropdown is None:
             return
 
         try:
             # Determine status filter
             status_filter = None
-            if self._history_status_filter:
+            if self._history_status_filter is not None:
                 raw = self._history_status_filter.currentText()
                 if raw and raw != "All":
                     status_filter = raw
@@ -1041,7 +1048,7 @@ class DeckOperationDialog(QDialog):
 
     def _on_history_job_changed(self, _index: int = -1) -> None:
         """Show details for selected history job and populate override dropdowns."""
-        if not self._history_job_dropdown or not self._history_detail_text:
+        if self._history_job_dropdown is None or self._history_detail_text is None:
             return
 
         job_id = self._history_job_dropdown.currentData()
@@ -1131,9 +1138,9 @@ class DeckOperationDialog(QDialog):
 
     def _set_history_buttons_enabled(self, enabled: bool) -> None:
         """Enable or disable history action buttons."""
-        if self._history_reinsert_btn:
+        if self._history_reinsert_btn is not None:
             self._history_reinsert_btn.setEnabled(enabled)
-        if self._history_delete_btn:
+        if self._history_delete_btn is not None:
             self._history_delete_btn.setEnabled(enabled)
 
     def _populate_history_field_overrides(self, job: Dict[str, Any]) -> None:
@@ -1145,7 +1152,7 @@ class DeckOperationDialog(QDialog):
             (self._history_target_override, "target_field"),
             (self._history_secondary_override, "translation_field"),
         ]:
-            if not dropdown:
+            if dropdown is None:
                 continue
             dropdown.blockSignals(True)
             dropdown.clear()
@@ -1167,7 +1174,7 @@ class DeckOperationDialog(QDialog):
 
     def _reinsert_selected_job(self) -> None:
         """Reinsert selected history job outputs into notes."""
-        if not self._history_job_dropdown:
+        if self._history_job_dropdown is None:
             return
 
         job_id = self._history_job_dropdown.currentData()
@@ -1175,17 +1182,20 @@ class DeckOperationDialog(QDialog):
             showWarning("Please select a saved job first.")
             return
 
-        overwrite = bool(self._history_overwrite_cb and self._history_overwrite_cb.isChecked())
+        overwrite = bool(
+            self._history_overwrite_cb is not None
+            and self._history_overwrite_cb.isChecked()
+        )
 
         # Read field overrides
         target_override = ""
-        if self._history_target_override:
+        if self._history_target_override is not None:
             raw = self._history_target_override.currentText()
             if raw and raw != "(Use original)":
                 target_override = raw
 
         secondary_override = ""
-        if self._history_secondary_override:
+        if self._history_secondary_override is not None:
             raw = self._history_secondary_override.currentText()
             if raw and raw != "(Use original)":
                 secondary_override = raw
@@ -1219,7 +1229,7 @@ class DeckOperationDialog(QDialog):
 
     def _delete_selected_job(self) -> None:
         """Delete the selected history job and its assets."""
-        if not self._history_job_dropdown:
+        if self._history_job_dropdown is None:
             return
 
         job_id = self._history_job_dropdown.currentData()
@@ -2951,6 +2961,26 @@ class DeckOperationDialog(QDialog):
         msg += f"Success Rate: {stats.get('success_rate', 0):.1f}%\n"
         
         showInfo(msg, title="API Statistics")
+
+    def _reset_api_usage_rotation(self) -> None:
+        """Reset API key usage statistics and restart rotation from the first key."""
+        key_count = self._key_manager.get_key_count()
+        if key_count <= 0:
+            showWarning("No API keys are configured.")
+            return
+
+        if not askUser(
+            "Reset API key usage and rotation state?\n\n"
+            "This clears usage statistics, failure counts, and quota cooldowns "
+            "for all configured keys, then restarts from key 1."
+        ):
+            return
+
+        self._key_manager.reset_usage_and_rotation()
+        if self._api_status_label is not None:
+            self._api_status_label.setText(f"API Keys configured: {key_count}")
+        self._update_api_key_status()
+        showInfo("API key usage and rotation state have been reset.")
     
     def _test_api_connection(self) -> None:
         """
@@ -3083,6 +3113,7 @@ class APIKeyDialog:
             options = [
                 "Add new API key",
                 "View key statistics", 
+                "Reset usage / rotation",
                 "Remove all keys",
                 "Cancel"
             ]
@@ -3104,6 +3135,8 @@ class APIKeyDialog:
                 self._add_key()
             elif choice == "View key statistics":
                 self._show_stats()
+            elif choice == "Reset usage / rotation":
+                self._reset_usage_rotation()
             elif choice == "Remove all keys":
                 self._clear_keys()
                 
@@ -3134,6 +3167,23 @@ class APIKeyDialog:
         msg += f"Success Rate: {stats.get('success_rate', 0):.1f}%\n"
         
         showInfo(msg, title="API Statistics")
+
+    def _reset_usage_rotation(self) -> None:
+        """Reset key usage statistics and restart rotation from the first key."""
+        from aqt.utils import askUser, showInfo, showWarning
+
+        key_count = self._key_manager.get_key_count()
+        if key_count <= 0:
+            showWarning("No API keys are configured.")
+            return
+
+        if askUser(
+            "Reset API key usage and rotation state?\n\n"
+            "This clears usage statistics, failure counts, and quota cooldowns "
+            "for all configured keys, then restarts from key 1."
+        ):
+            self._key_manager.reset_usage_and_rotation()
+            showInfo("API key usage and rotation state have been reset.")
     
     def _clear_keys(self) -> None:
         """Clear all API keys."""

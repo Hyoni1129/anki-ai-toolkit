@@ -11,11 +11,13 @@ inside Anki.  Those tests mock the aqt module so they can run in a
 plain Python environment.
 """
 
+import importlib.util
 import json
 import os
 import shutil
 import sys
 import tempfile
+import types
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -423,6 +425,116 @@ class TestEdgeCases(unittest.TestCase):
         for _ in range(20):
             ids.add(self.mgr.start_job("translation", 1, "Deck"))
         self.assertEqual(len(ids), 20)
+
+
+class TestBatchErrorHistoryItems(unittest.TestCase):
+    """Regression coverage for whole-batch API failures entering history."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.mgr = JobHistoryManager(self.temp_dir)
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _load_batch_translator(self):
+        """Load BatchTranslator with minimal Anki stubs and package context."""
+        package_name = "_stella_batch_history_test"
+        package = types.ModuleType(package_name)
+        package.__path__ = [_addon_root]
+        sys.modules[package_name] = package
+
+        for subpackage in ("translation", "core", "config"):
+            module_name = f"{package_name}.{subpackage}"
+            module = types.ModuleType(module_name)
+            module.__path__ = [os.path.join(_addon_root, subpackage)]
+            sys.modules[module_name] = module
+
+        class DummyQObject:
+            pass
+
+        class DummyQRunnable:
+            def __init__(self):
+                pass
+
+        class DummySignal:
+            def __init__(self, *args, **kwargs):
+                self.emitted = []
+
+            def emit(self, *args):
+                self.emitted.append(args)
+
+        def pyqtSignal(*args, **kwargs):
+            return DummySignal()
+
+        aqt_module = types.ModuleType("aqt")
+        aqt_module.mw = types.SimpleNamespace(taskman=None)
+        qt_module = types.ModuleType("aqt.qt")
+        qt_module.QObject = DummyQObject
+        qt_module.QRunnable = DummyQRunnable
+        qt_module.pyqtSignal = pyqtSignal
+
+        old_aqt = sys.modules.get("aqt")
+        old_qt = sys.modules.get("aqt.qt")
+        sys.modules["aqt"] = aqt_module
+        sys.modules["aqt.qt"] = qt_module
+        try:
+            module_name = f"{package_name}.translation.batch_translator"
+            path = os.path.join(_addon_root, "translation", "batch_translator.py")
+            spec = importlib.util.spec_from_file_location(module_name, path)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            spec.loader.exec_module(module)
+            return module.BatchTranslator
+        finally:
+            if old_aqt is not None:
+                sys.modules["aqt"] = old_aqt
+            else:
+                sys.modules.pop("aqt", None)
+            if old_qt is not None:
+                sys.modules["aqt.qt"] = old_qt
+            else:
+                sys.modules.pop("aqt.qt", None)
+
+    def test_batch_api_error_can_be_appended_to_history(self):
+        BatchTranslator = self._load_batch_translator()
+        worker = BatchTranslator(
+            notes_data=[],
+            target_language="Korean",
+            destination_field="korean",
+            addon_dir=self.temp_dir,
+        )
+
+        batch_results = worker._build_failed_batch_results(
+            [
+                {"note_id": "101", "word": "harbour"},
+                {"note_id": "102", "word": "astronomical"},
+            ],
+            RuntimeError("429 quota exceeded"),
+        )
+
+        history_items = [
+            {
+                "note_id": result["note_id"],
+                "source_text": result["word"],
+                "target_field": result["target_field"],
+                "api_output": result["translation"],
+                "insert_status": result["insert_status"],
+                "insert_error": result["insert_error"],
+            }
+            for result in batch_results
+        ]
+
+        job_id = self.mgr.start_job("translation", 1, "Deck")
+        self.mgr.append_items(job_id, history_items)
+        job = self.mgr.get_job(job_id)
+
+        self.assertEqual(job["summary"]["total"], 2)
+        self.assertEqual(job["summary"]["success"], 0)
+        self.assertEqual(job["summary"]["failure"], 2)
+        self.assertEqual(job["items"][0]["source_text"], "harbour")
+        self.assertEqual(job["items"][0]["insert_status"], "failed")
+        self.assertIn("429 quota exceeded", job["items"][0]["insert_error"])
 
 
 if __name__ == "__main__":
